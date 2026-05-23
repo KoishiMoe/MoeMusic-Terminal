@@ -358,7 +358,12 @@ class StandaloneTui(
     ) {
         if (y < 0) return
         graphics.foregroundColor = color
-        graphics.putString(0, y, text.take(width).padEnd(width), modifiers.toList())
+        val line = text.take(width).padEnd(width)
+        if (modifiers.isEmpty()) {
+            graphics.putString(0, y, line)
+        } else {
+            graphics.putString(0, y, line, modifiers.toList())
+        }
     }
 
     private fun scrollStart(index: Int, visibleRows: Int, total: Int): Int {
