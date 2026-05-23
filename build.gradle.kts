@@ -1,0 +1,42 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
+plugins {
+    kotlin("jvm") version "2.3.21"
+    application
+}
+
+group = "org.lolicode.moemusic"
+version = "1.0.0-dev"
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
+    }
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+application {
+    mainClass.set("org.lolicode.moemusic.standalone.StandaloneMainKt")
+}
+
+dependencies {
+    implementation("org.lolicode.moemusic:api:1.0.0")
+    implementation("org.lolicode.moemusic:core:1.0.0")
+    implementation("org.lolicode.moemusic:client-core:1.0.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+    implementation("com.googlecode.lanterna:lanterna:3.1.5")
+    implementation("org.slf4j:slf4j-api:2.0.17")
+    runtimeOnly("org.slf4j:slf4j-simple:2.0.17")
+
+    testImplementation(kotlin("test"))
+    testImplementation("org.junit.jupiter:junit-jupiter:6.0.3")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.0.3")
+}
+
+tasks.test {
+    useJUnitPlatform()
+}

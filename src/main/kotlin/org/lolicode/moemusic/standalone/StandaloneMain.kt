@@ -1,0 +1,81 @@
+package org.lolicode.moemusic.standalone
+
+import java.nio.file.Path
+import java.nio.file.Paths
+import kotlin.io.path.createDirectories
+
+fun main(args: Array<String>) {
+    val options = StandaloneOptions.parse(args) ?: return
+    options.configDir.createDirectories()
+
+    StandaloneApplication(options.configDir).use { app ->
+        app.start()
+        StandaloneTui(app).run()
+    }
+}
+
+data class StandaloneOptions(
+    val configDir: Path = defaultConfigDir(),
+) {
+    companion object {
+        fun parse(args: Array<String>): StandaloneOptions? {
+            var configDir = defaultConfigDir()
+            var index = 0
+            while (index < args.size) {
+                when (val arg = args[index]) {
+                    "--help", "-h" -> {
+                        printHelp()
+                        return null
+                    }
+
+                    "--config-dir" -> {
+                        val value = args.getOrNull(index + 1)
+                            ?: error("--config-dir requires a path")
+                        configDir = Paths.get(value).toAbsolutePath().normalize()
+                        index += 1
+                    }
+
+                    else -> error("Unknown argument: $arg")
+                }
+                index += 1
+            }
+            return StandaloneOptions(configDir)
+        }
+
+        private fun printHelp() {
+            println(
+                """
+                MoeMusic standalone prototype
+
+                Options:
+                  --config-dir <path>   Config directory. Defaults to the OS config directory.
+                  -h, --help            Show this help.
+                """.trimIndent(),
+            )
+        }
+    }
+}
+
+fun defaultConfigDir(
+    osName: String = System.getProperty("os.name").orEmpty(),
+    env: Map<String, String> = System.getenv(),
+    userHome: String = System.getProperty("user.home").orEmpty(),
+): Path {
+    val normalizedOs = osName.lowercase()
+    return when {
+        "win" in normalizedOs -> {
+            val base = env["APPDATA"].orEmpty().ifBlank { env["LOCALAPPDATA"].orEmpty() }
+            Paths.get(base.ifBlank { userHome }).resolve("MoeMusicStandalone")
+        }
+
+        "mac" in normalizedOs || "darwin" in normalizedOs ->
+            Paths.get(userHome).resolve("Library").resolve("Application Support").resolve("MoeMusicStandalone")
+
+        else -> {
+            val base = env["XDG_CONFIG_HOME"].orEmpty().ifBlank {
+                Paths.get(userHome).resolve(".config").toString()
+            }
+            Paths.get(base).resolve("moemusic-standalone")
+        }
+    }.toAbsolutePath().normalize()
+}
