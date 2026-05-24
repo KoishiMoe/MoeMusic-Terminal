@@ -70,6 +70,7 @@ internal class StandaloneCoverArtRenderer(
         width: Int,
         height: Int,
         coverMode: CoverMode,
+        terminalImageBackground: TextColor = PLACEHOLDER_BG,
     ) {
         if (width < MIN_COVER_WIDTH || height < MIN_COVER_HEIGHT || coverMode == CoverMode.OFF) {
             return
@@ -95,7 +96,7 @@ internal class StandaloneCoverArtRenderer(
             is CoverState.Ready -> {
                 val protocol = frameProtocol
                 if (protocol != null && coverMode != CoverMode.UNICODE) {
-                    drawPlaceholder(graphics, x, y, width, height, "")
+                    drawPlaceholder(graphics, x, y, width, height, "", terminalImageBackground)
                     requestedTerminalImage = TerminalImageRequest(
                         protocol = protocol,
                         imageId = terminalImageIdFor(key),
@@ -133,7 +134,7 @@ internal class StandaloneCoverArtRenderer(
             return
         }
 
-        if (rendered != null && rendered.imageId != request.imageId) {
+        if (rendered != null && !rendered.samePlacementAs(request)) {
             deleteTerminalImage(terminal, rendered)
         }
         writeTerminalImage(terminal, request)
@@ -327,8 +328,9 @@ internal class StandaloneCoverArtRenderer(
         width: Int,
         height: Int,
         label: String,
+        background: TextColor = PLACEHOLDER_BG,
     ) {
-        val blank = TextCharacter(' ', PLACEHOLDER_FG, PLACEHOLDER_BG)
+        val blank = TextCharacter(' ', PLACEHOLDER_FG, background)
         for (row in 0 until height) {
             for (col in 0 until width) {
                 graphics.setCharacter(x + col, y + row, blank)
@@ -338,7 +340,7 @@ internal class StandaloneCoverArtRenderer(
         val textX = x + ((width - TerminalTextUtils.getColumnWidth(text)) / 2).coerceAtLeast(0)
         val textY = y + height / 2
         graphics.foregroundColor = PLACEHOLDER_FG
-        graphics.backgroundColor = PLACEHOLDER_BG
+        graphics.backgroundColor = background
         if (text.isNotEmpty()) {
             graphics.putString(textX, textY, text)
         }
@@ -352,13 +354,17 @@ internal class StandaloneCoverArtRenderer(
 
     private fun writeTerminalImage(terminal: Terminal, request: TerminalImageRequest) {
         when (request.protocol) {
-            TerminalImageProtocol.KITTY -> writeKittyImage(terminal, request)
+            TerminalImageProtocol.KITTY,
+            TerminalImageProtocol.KITTY_CELL_RECT,
+            -> writeKittyImage(terminal, request)
         }
     }
 
     private fun deleteTerminalImage(terminal: Terminal, request: TerminalImageRequest) {
         when (request.protocol) {
-            TerminalImageProtocol.KITTY -> {
+            TerminalImageProtocol.KITTY,
+            TerminalImageProtocol.KITTY_CELL_RECT,
+            -> {
                 TerminalRawWriter.write(terminal, "\u001B_Ga=d,d=i,i=${request.imageId},q=2;\u001B\\")
                 terminal.flush()
             }
@@ -375,7 +381,8 @@ internal class StandaloneCoverArtRenderer(
             val moreChunks = nextOffset < encoded.length
             val chunk = encoded.substring(offset, nextOffset)
             val params = if (firstChunk) {
-                "a=T,f=100,t=d,i=${request.imageId},s=${request.pngWidth},v=${request.pngHeight},c=${request.width},C=1,q=2,m=${if (moreChunks) 1 else 0}"
+                val rows = if (request.protocol.constrainRows) ",r=${request.height}" else ""
+                "a=T,f=100,t=d,i=${request.imageId},s=${request.pngWidth},v=${request.pngHeight},c=${request.width}$rows,C=1,q=2,m=${if (moreChunks) 1 else 0}"
             } else {
                 "m=${if (moreChunks) 1 else 0}"
             }
@@ -444,8 +451,11 @@ private data class TerminalImageRequest(
             png.contentEquals(other.png)
 }
 
-private enum class TerminalImageProtocol {
-    KITTY,
+private enum class TerminalImageProtocol(
+    val constrainRows: Boolean,
+) {
+    KITTY(constrainRows = false),
+    KITTY_CELL_RECT(constrainRows = true),
     ;
 
     companion object {
@@ -454,24 +464,34 @@ private enum class TerminalImageProtocol {
             if (!TerminalRawWriter.canWrite(terminal)) return null
             if (!isTextTerminal(terminal)) return null
             return when (coverMode) {
-                CoverMode.KITTY -> KITTY
+                CoverMode.KITTY -> if (isKonsoleEnvironment()) KITTY_CELL_RECT else KITTY
                 CoverMode.TERMINAL -> detect()
-                CoverMode.AUTO -> detect().takeIf { isKnownSupportedEnvironment() }
+                CoverMode.AUTO -> detect()
                 CoverMode.UNICODE, CoverMode.OFF -> null
             }
         }
 
         private fun detect(): TerminalImageProtocol? =
-            if (isKnownSupportedEnvironment()) KITTY else null
+            when {
+                isKonsoleEnvironment() -> KITTY_CELL_RECT
+                isKnownSupportedEnvironment() -> KITTY
+                else -> null
+            }
 
         private fun isKnownSupportedEnvironment(): Boolean {
             val env = System.getenv()
             val term = env["TERM"].orEmpty().lowercase()
             val termProgram = env["TERM_PROGRAM"].orEmpty().lowercase()
             return "kitty" in term ||
+                isKonsoleEnvironment(env) ||
                 termProgram in setOf("kitty", "wezterm", "ghostty") ||
                 "wezterm" in termProgram ||
                 "ghostty" in termProgram
+        }
+
+        private fun isKonsoleEnvironment(env: Map<String, String> = System.getenv()): Boolean {
+            val termProgram = env["TERM_PROGRAM"].orEmpty().lowercase()
+            return "konsole" in termProgram || env["KONSOLE_VERSION"] != null
         }
 
         private fun isTextTerminal(terminal: Terminal): Boolean {

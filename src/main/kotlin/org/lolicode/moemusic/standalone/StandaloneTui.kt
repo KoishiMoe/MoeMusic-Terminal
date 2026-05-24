@@ -677,7 +677,16 @@ class StandaloneTui(
             val coverHeight = coverWidth / 2
             val coverX = if (body.width >= 70) body.x else body.x + ((body.width - coverWidth) / 2).coerceAtLeast(0)
             val coverY = body.y + 2
-            coverRenderer.draw(graphics, track, coverX, coverY, coverWidth, coverHeight, options.coverMode)
+            coverRenderer.draw(
+                graphics,
+                track,
+                coverX,
+                coverY,
+                coverWidth,
+                coverHeight,
+                options.coverMode,
+                terminalImageBackground = PANEL_BG,
+            )
             if (body.width >= 70) {
                 textX = coverX + coverWidth + 2
                 textY = coverY
