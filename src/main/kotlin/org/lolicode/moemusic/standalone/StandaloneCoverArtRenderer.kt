@@ -32,7 +32,12 @@ internal class StandaloneCoverArtRenderer(
     private sealed interface CoverState {
         data object Loading : CoverState
         data object Failed : CoverState
-        data class Ready(val cells: List<List<TextCharacter>>, val png: ByteArray) : CoverState
+        data class Ready(
+            val cells: List<List<TextCharacter>>,
+            val png: ByteArray,
+            val pngWidth: Int,
+            val pngHeight: Int,
+        ) : CoverState
     }
 
     private data class CoverLimits(
@@ -76,11 +81,12 @@ internal class StandaloneCoverArtRenderer(
             return
         }
 
-        val key = "$url#$width.$height"
+        val useTerminalImage = frameProtocol != null && coverMode != CoverMode.UNICODE
+        val key = "$url#$width.$height#${if (useTerminalImage) "terminal" else "cells"}"
         when (val state = stateFor(key)) {
             null -> {
                 remember(key, CoverState.Loading)
-                loadAsync(key, url, width, height)
+                loadAsync(key, url, width, height, useTerminalImage)
                 drawPlaceholder(graphics, x, y, width, height, "loading")
             }
 
@@ -98,6 +104,8 @@ internal class StandaloneCoverArtRenderer(
                         width = width,
                         height = height,
                         png = state.png,
+                        pngWidth = state.pngWidth,
+                        pngHeight = state.pngHeight,
                     )
                 } else {
                     drawCells(graphics, x, y, width, height, state.cells)
@@ -154,18 +162,20 @@ internal class StandaloneCoverArtRenderer(
         }
     }
 
-    private fun loadAsync(key: String, url: String, width: Int, height: Int) {
+    private fun loadAsync(key: String, url: String, width: Int, height: Int, terminalImage: Boolean) {
         scope.launch {
             val state = runCatching {
                 when (ClientMediaFirewall.evaluate(url)) {
                     MediaUrlPolicyResult.Allow -> Unit
                     is MediaUrlPolicyResult.Reject -> error("Blocked by local media policy")
                 }
-                val limits = coverLimits(width, height)
+                val limits = coverLimits(width, height, terminalImage)
                 val source = loadCoverImage(url, limits)
                 CoverState.Ready(
                     cells = renderCells(source, width, height),
                     png = encodePng(source),
+                    pngWidth = source.width,
+                    pngHeight = source.height,
                 )
             }.getOrElse {
                 CoverState.Failed
@@ -174,14 +184,19 @@ internal class StandaloneCoverArtRenderer(
         }
     }
 
-    private fun coverLimits(width: Int, height: Int): CoverLimits {
+    private fun coverLimits(width: Int, height: Int, terminalImage: Boolean): CoverLimits {
         val config = ModConfigManager.config.client.coverArt.normalized()
+        val decodeTargetSize = if (terminalImage) {
+            config.maxTextureSize
+        } else {
+            maxOf(width * 12, height * 24, 128)
+        }
         return CoverLimits(
             maxDownloadBytes = config.maxDownloadMebibytes * 1024 * 1024,
             maxSourceDimension = config.maxSourceDimension,
             maxSourcePixels = config.maxSourcePixels,
             maxDecodeDownscaleFactor = config.maxDecodeDownscaleFactor,
-            decodeTargetSize = minOf(config.maxTextureSize, maxOf(width * 12, height * 24, 128)),
+            decodeTargetSize = minOf(config.maxTextureSize, decodeTargetSize),
         )
     }
 
@@ -360,7 +375,7 @@ internal class StandaloneCoverArtRenderer(
             val moreChunks = nextOffset < encoded.length
             val chunk = encoded.substring(offset, nextOffset)
             val params = if (firstChunk) {
-                "a=T,f=100,t=d,i=${request.imageId},c=${request.width},r=${request.height},C=1,q=2,m=${if (moreChunks) 1 else 0}"
+                "a=T,f=100,t=d,i=${request.imageId},s=${request.pngWidth},v=${request.pngHeight},c=${request.width},C=1,q=2,m=${if (moreChunks) 1 else 0}"
             } else {
                 "m=${if (moreChunks) 1 else 0}"
             }
@@ -414,6 +429,8 @@ private data class TerminalImageRequest(
     val width: Int,
     val height: Int,
     val png: ByteArray,
+    val pngWidth: Int,
+    val pngHeight: Int,
 ) {
     fun samePlacementAs(other: TerminalImageRequest): Boolean =
         protocol == other.protocol &&
@@ -422,6 +439,8 @@ private data class TerminalImageRequest(
             y == other.y &&
             width == other.width &&
             height == other.height &&
+            pngWidth == other.pngWidth &&
+            pngHeight == other.pngHeight &&
             png.contentEquals(other.png)
 }
 
