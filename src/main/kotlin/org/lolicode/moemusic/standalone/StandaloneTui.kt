@@ -663,12 +663,13 @@ class StandaloneTui(
 
         val ctx = app.client.currentContext
         val state = playbackStateLabel(ctx?.state)
-        val volume = app.client.playbackService.effectiveVolumePercent
-        putText(graphics, body.x, body.y, body.width, "State: $state   Volume: $volume%", MUTED, PANEL_BG)
+        putText(graphics, body.x, body.y, body.width, "State: $state", MUTED, PANEL_BG)
 
         if (ctx == null) {
             putText(graphics, body.x, body.y + 2, body.width, "No track loaded.", MUTED, PANEL_BG)
-            drawVolumeBar(graphics, Rect(body.x, body.bottom - 2, body.width, 1), interactive = true)
+            val expandedControls = body.height >= EXPANDED_CONTROL_MIN_HEIGHT
+            val controlsHeight = if (expandedControls) 2 else 1
+            drawVolumeOnlyControls(graphics, bottomRect(body, controlsHeight), expandedControls)
             return
         }
 
@@ -706,18 +707,18 @@ class StandaloneTui(
         putText(graphics, textX, textY + 2, textWidth, "Album: ${track.album ?: "-"}", WARM, PANEL_BG)
         putText(graphics, textX, textY + 3, textWidth, "Source: ${sourceDisplayName(track.sourceId).ifBlank { "-" }}", SOURCE, PANEL_BG)
         val position = app.client.currentPositionMs(ctx)
-        putText(graphics, textX, textY + 4, textWidth, "${formatTime(position)} / ${formatTime(track.durationMs)}", MUTED, PANEL_BG)
+        val expandedControls = body.height >= EXPANDED_CONTROL_MIN_HEIGHT
+        val controlsHeight = if (expandedControls) 5 else 3
+        val controls = bottomRect(body, controlsHeight)
 
         inlineLyricText(track, position)?.takeIf { showInlineLyric }?.let { lyric ->
-            val lyricY = (body.bottom - 5).coerceAtLeast(textY + 6)
-            if (lyricY < body.bottom - 3) {
+            val lyricY = (controls.y - 2).coerceAtLeast(textY + 5)
+            if (lyricY < controls.y) {
                 putText(graphics, body.x, lyricY, body.width, lyric, LYRIC, PANEL_BG)
             }
         }
 
-        drawVolumeBar(graphics, Rect(body.x, body.bottom - 3, body.width, 1), interactive = true)
-        drawPlaybackProgress(graphics, Rect(body.x, body.bottom - 2, body.width, 1), interactive = true)
-        drawPlaybackButtons(graphics, Rect(body.x, body.bottom, body.width, 1))
+        drawPlaybackControls(graphics, controls, expandedControls)
     }
 
     private fun drawNowPlayingDetailsPane(graphics: TextGraphics, rect: Rect) {
@@ -1051,17 +1052,62 @@ class StandaloneTui(
         putText(graphics, rect.x + 1, rect.y + 1, rect.width - 2, track.artistDisplay.ifBlank { "-" }, MUTED, PINNED_BG)
     }
 
-    private fun drawVolumeBar(graphics: TextGraphics, rect: Rect, interactive: Boolean) {
+    private fun drawVolumeOnlyControls(graphics: TextGraphics, rect: Rect, expanded: Boolean) {
+        if (rect.width <= 0 || rect.height <= 0) return
+        if (expanded && rect.height >= 2) {
+            putText(graphics, rect.x, rect.y, rect.width, volumeLabel(), MUTED, PANEL_BG)
+            drawVolumeBar(graphics, Rect(rect.x, rect.y + 1, rect.width, 1), interactive = true, inlineLabel = false)
+        } else {
+            drawVolumeBar(graphics, Rect(rect.x, rect.y, rect.width, 1), interactive = true, inlineLabel = true)
+        }
+    }
+
+    private fun drawPlaybackControls(graphics: TextGraphics, rect: Rect, expanded: Boolean) {
+        if (rect.width <= 0 || rect.height <= 0) return
+        if (expanded && rect.height >= 5) {
+            putText(graphics, rect.x, rect.y, rect.width, volumeLabel(), MUTED, PANEL_BG)
+            drawVolumeBar(graphics, Rect(rect.x, rect.y + 1, rect.width, 1), interactive = true, inlineLabel = false)
+            putText(graphics, rect.x, rect.y + 2, rect.width, progressLabel(), MUTED, PANEL_BG)
+            drawPlaybackProgress(graphics, Rect(rect.x, rect.y + 3, rect.width, 1), interactive = true, inlineLabel = false)
+            drawPlaybackButtons(graphics, Rect(rect.x, rect.y + 4, rect.width, 1))
+        } else {
+            drawVolumeBar(graphics, Rect(rect.x, rect.y, rect.width, 1), interactive = true, inlineLabel = true)
+            if (rect.height >= 2) {
+                drawPlaybackProgress(graphics, Rect(rect.x, rect.y + 1, rect.width, 1), interactive = true, inlineLabel = true)
+            }
+            if (rect.height >= 3) {
+                drawPlaybackButtons(graphics, Rect(rect.x, rect.y + 2, rect.width, 1))
+            }
+        }
+    }
+
+    private fun drawVolumeBar(
+        graphics: TextGraphics,
+        rect: Rect,
+        interactive: Boolean,
+        inlineLabel: Boolean = true,
+    ) {
         if (rect.width <= 0 || rect.height <= 0) return
         val percent = app.client.playbackService.effectiveVolumePercent
-        val label = "Vol $percent%"
-        val barRect = drawBar(graphics, rect, percent / 100f, VOLUME_BG, VOLUME_FG, label)
+        val barRect = drawBar(
+            graphics,
+            rect,
+            percent / 100f,
+            VOLUME_BG,
+            VOLUME_FG,
+            inlineLabel = volumeLabel(percent).takeIf { inlineLabel },
+        )
         if (interactive) {
             addHitAt(barRect) { x, _ -> beginDrag(DragTarget.VOLUME, barRect, x) }
         }
     }
 
-    private fun drawPlaybackProgress(graphics: TextGraphics, rect: Rect, interactive: Boolean) {
+    private fun drawPlaybackProgress(
+        graphics: TextGraphics,
+        rect: Rect,
+        interactive: Boolean,
+        inlineLabel: Boolean = true,
+    ) {
         if (rect.width <= 0 || rect.height <= 0) return
         val ctx = app.client.currentContext
         val duration = ctx?.track?.durationMs ?: 0L
@@ -1071,8 +1117,14 @@ class StandaloneTui(
         } else {
             0f
         }
-        val label = "${formatTime(position)} / ${formatTime(duration)}"
-        val barRect = drawBar(graphics, rect, progress, BAR_BG, if (ctx?.state is PlaybackState.Paused) PAUSED else ACCENT, label)
+        val barRect = drawBar(
+            graphics,
+            rect,
+            progress,
+            BAR_BG,
+            if (ctx?.state is PlaybackState.Paused) PAUSED else ACCENT,
+            inlineLabel = progressLabel(position, duration).takeIf { inlineLabel },
+        )
         if (interactive && duration > 0) {
             addHitAt(barRect) { x, _ -> beginDrag(DragTarget.SEEK, barRect, x) }
         }
@@ -1147,23 +1199,42 @@ class StandaloneTui(
         progress: Float,
         background: TextColor,
         foreground: TextColor,
-        label: String,
+        inlineLabel: String? = null,
     ): Rect {
-        val labelText = " $label "
-        val labelWidth = columnWidth(labelText)
-        val showLabel = rect.width >= labelWidth + MIN_BAR_WIDTH
-        val barRect = if (showLabel) {
-            putText(graphics, rect.x, rect.y, labelWidth, labelText, TEXT, PANEL_BG)
-            Rect(rect.x + labelWidth, rect.y, rect.width - labelWidth, rect.height)
-        } else {
-            rect
-        }
-        val filled = (barRect.width * progress.coerceIn(0f, 1f)).roundToInt().coerceIn(0, barRect.width)
-        fillRect(graphics, barRect, background)
+        val filled = (rect.width * progress.coerceIn(0f, 1f)).roundToInt().coerceIn(0, rect.width)
+        fillRect(graphics, rect, background)
         if (filled > 0) {
-            fillRect(graphics, Rect(barRect.x, barRect.y, filled, barRect.height), foreground)
+            fillRect(graphics, Rect(rect.x, rect.y, filled, rect.height), foreground)
         }
-        return barRect
+        if (inlineLabel != null) {
+            drawInlineBarLabel(graphics, rect, inlineLabel, filled, background, foreground)
+        }
+        return rect
+    }
+
+    private fun drawInlineBarLabel(
+        graphics: TextGraphics,
+        rect: Rect,
+        label: String,
+        filled: Int,
+        background: TextColor,
+        foreground: TextColor,
+    ) {
+        val text = TerminalTextUtils.fitString(" ${label.sanitizeForTerminal()} ", rect.width)
+        text.forEachIndexed { index, char ->
+            if (index >= rect.width) return
+            val inFilledRegion = index < filled
+            graphics.setCharacter(
+                rect.x + index,
+                rect.y,
+                TextCharacter(
+                    char,
+                    if (inFilledRegion) BAR_LABEL_ON_FILL else TEXT,
+                    if (inFilledRegion) foreground else background,
+                    SGR.BOLD,
+                ),
+            )
+        }
     }
 
     private fun fillRect(graphics: TextGraphics, rect: Rect, background: TextColor) {
@@ -1207,6 +1278,19 @@ class StandaloneTui(
     private fun columnWidth(text: String): Int =
         TerminalTextUtils.getColumnWidth(text.sanitizeForTerminal())
 
+    private fun volumeLabel(percent: Int = app.client.playbackService.effectiveVolumePercent): String =
+        "Volume $percent%"
+
+    private fun progressLabel(): String {
+        val ctx = app.client.currentContext
+        val duration = ctx?.track?.durationMs ?: 0L
+        val position = ctx?.let(app.client::currentPositionMs) ?: 0L
+        return progressLabel(position, duration)
+    }
+
+    private fun progressLabel(positionMs: Long, durationMs: Long): String =
+        "Progress ${formatTime(positionMs)} / ${formatTime(durationMs)}"
+
     private fun inlineLyricText(track: TrackInfo, positionMs: Long): String? {
         val primary = parseLyrics(track.lyricLrc)
             ?.lineAt(positionMs)
@@ -1228,6 +1312,11 @@ class StandaloneTui(
 
     private fun clearVirtualFrame(graphics: TextGraphics, width: Int, height: Int) {
         fillRect(graphics, Rect(0, 0, width, height), TextColor.ANSI.DEFAULT)
+    }
+
+    private fun bottomRect(rect: Rect, height: Int): Rect {
+        val actualHeight = height.coerceIn(0, rect.height)
+        return Rect(rect.x, rect.bottom - actualHeight + 1, rect.width, actualHeight)
     }
 
     private fun addHit(rect: Rect, action: () -> Unit) {
@@ -1428,10 +1517,11 @@ class StandaloneTui(
         private const val WIDE_LAYOUT_MIN_WIDTH = 112
         private const val SEARCH_ROW_HEIGHT = 2
         private const val QUEUE_ROW_HEIGHT = 2
-        private const val MIN_BAR_WIDTH = 8
+        private const val EXPANDED_CONTROL_MIN_HEIGHT = 12
         private const val LAST_COLUMN_WRAP_GUARD = 0 // 1
 
         private val TEXT = TextColor.RGB(234, 237, 243)
+        private val BAR_LABEL_ON_FILL = TextColor.RGB(8, 12, 18)
         private val MUTED = TextColor.RGB(158, 166, 178)
         private val HEADER_FG = TextColor.RGB(246, 248, 252)
         private val HEADER_BG = TextColor.RGB(30, 37, 49)
