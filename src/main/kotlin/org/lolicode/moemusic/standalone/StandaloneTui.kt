@@ -4,8 +4,10 @@ import com.googlecode.lanterna.SGR
 import com.googlecode.lanterna.TextColor
 import com.googlecode.lanterna.input.KeyStroke
 import com.googlecode.lanterna.input.KeyType
+import com.googlecode.lanterna.screen.Screen
 import com.googlecode.lanterna.screen.TerminalScreen
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory
+import com.googlecode.lanterna.terminal.Terminal
 import kotlinx.coroutines.launch
 import org.lolicode.moemusic.api.model.PlaybackState
 import org.lolicode.moemusic.api.model.SearchQuery
@@ -16,11 +18,13 @@ import org.lolicode.moemusic.api.model.artistDisplay
 import org.lolicode.moemusic.api.service.PlaybackAction
 import org.lolicode.moemusic.core.config.ClientVolume
 import org.lolicode.moemusic.core.config.ModConfigManager
+import java.awt.GraphicsEnvironment
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.max
 
 class StandaloneTui(
     private val app: StandaloneApplication,
+    private val terminal: Terminal,
 ) {
 
     private enum class Focus {
@@ -41,24 +45,28 @@ class StandaloneTui(
     private var selectedQueueIndex = 0
     private var promptMode: PromptMode? = null
     private val promptBuffer = StringBuilder()
+    private var needsClear = true
 
     fun run() {
-        val terminal = DefaultTerminalFactory().createTerminal()
         val screen = TerminalScreen(terminal)
         screen.startScreen()
         screen.cursorPosition = null
+        screen.clear()
         requestQueue()
 
         try {
             while (running.get()) {
+                if (screen.doResizeIfNecessary() != null) {
+                    needsClear = true
+                }
                 var key = screen.pollInput()
                 while (key != null) {
                     handleKey(key)
                     key = screen.pollInput()
                 }
                 render(screen)
-                screen.refresh()
-                Thread.sleep(100)
+                screen.refresh(Screen.RefreshType.DELTA)
+                Thread.sleep(250)
             }
         } finally {
             screen.stopScreen()
@@ -234,8 +242,12 @@ class StandaloneTui(
         val size = screen.terminalSize
         val width = size.columns
         val height = size.rows
+        if (width <= 0 || height <= 0) return
         val graphics = screen.newTextGraphics()
-        screen.clear()
+        if (needsClear) {
+            screen.clear()
+            needsClear = false
+        }
 
         var y = 0
         putLine(graphics, y++, width, "MoeMusic Standalone", TextColor.ANSI.CYAN, SGR.BOLD)
@@ -246,21 +258,33 @@ class StandaloneTui(
         y = drawNowPlaying(graphics, y, width)
         y++
 
-        val panelHeight = max(3, (height - y - 5) / 2)
-        y = drawSearch(graphics, y, width, panelHeight)
-        y = drawQueue(graphics, y, width, panelHeight)
+        val helpLines = helpLines(width)
+        val promptLineCount = if (promptMode != null) 1 else 0
+        val footerStart = (height - helpLines.size - promptLineCount).coerceAtLeast(0)
+        val contentRows = (footerStart - y).coerceAtLeast(0)
+        val panelRows = ((contentRows - 2) / 2).coerceAtLeast(0)
+        if (contentRows >= 2) {
+            y = drawSearch(graphics, y, width, panelRows)
+            y = drawQueue(graphics, y, width, panelRows)
+        }
+        while (y < footerStart) {
+            putLine(graphics, y++, width, "", TextColor.ANSI.WHITE)
+        }
 
         val prompt = promptMode
         if (prompt != null) {
-            putLine(graphics, height - 2, width, "${prompt.label}: $promptBuffer", TextColor.ANSI.GREEN, SGR.BOLD)
+            putLine(
+                graphics,
+                footerStart,
+                width,
+                "${prompt.label}: $promptBuffer",
+                TextColor.ANSI.GREEN,
+                SGR.BOLD,
+            )
         }
-        putLine(
-            graphics,
-            height - 1,
-            width,
-            "q quit | / search | u submit URL | enter/a add | r queue | x remove | space pause | n skip | s stop | +/- volume | c reload | tab focus",
-            TextColor.ANSI.WHITE,
-        )
+        helpLines.forEachIndexed { index, line ->
+            putLine(graphics, height - helpLines.size + index, width, line, TextColor.ANSI.WHITE)
+        }
     }
 
     private fun drawNowPlaying(
@@ -366,6 +390,25 @@ class StandaloneTui(
         }
     }
 
+    private fun helpLines(width: Int): List<String> =
+        when {
+            width < 48 -> listOf(
+                "q quit  / search  u URL  enter add",
+                "space pause  n skip  s stop  +/- vol",
+                "tab focus  r queue  x rm  c reload",
+            )
+
+            width < 88 -> listOf(
+                "q quit | / search | u URL | enter/a add | tab focus | r queue | x remove",
+                "space pause | n skip | s stop | +/- volume | c reload",
+            )
+
+            else -> listOf(
+                "q quit | / search | u submit URL | enter/a add | r queue | x remove",
+                "space pause | n skip | s stop | +/- volume | c reload | tab focus",
+            )
+        }
+
     private fun scrollStart(index: Int, visibleRows: Int, total: Int): Int {
         if (visibleRows <= 0 || total <= visibleRows) return 0
         return index.coerceIn(0, total - 1)
@@ -382,5 +425,57 @@ class StandaloneTui(
         if (ms <= 0) return "--:--"
         val seconds = ms / 1_000L
         return "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
+    }
+
+    companion object {
+        fun createTerminal(terminalMode: TerminalMode): Terminal {
+            val textFactory = newTerminalFactory().setForceTextTerminal(true)
+            return when (terminalMode) {
+                TerminalMode.TEXT -> createTextTerminal(textFactory)
+                TerminalMode.SWING -> newTerminalFactory().createTerminalEmulator()
+                TerminalMode.AUTO -> runCatching {
+                    createTextTerminal(textFactory)
+                }.getOrElse { textError ->
+                    if (isAwtHeadless()) {
+                        throw terminalUnavailable(textError)
+                    }
+                    newTerminalFactory().createTerminalEmulator()
+                }
+            }
+        }
+
+        private fun createTextTerminal(factory: DefaultTerminalFactory): Terminal =
+            try {
+                factory.createTerminal()
+            } catch (e: IOException) {
+                throw terminalUnavailable(e)
+            }
+
+        private fun newTerminalFactory(): DefaultTerminalFactory =
+            DefaultTerminalFactory()
+                .setInputTimeout(50)
+                .setTerminalEmulatorTitle("MoeMusic Standalone")
+
+        private fun terminalUnavailable(cause: Throwable): StandaloneTerminalException =
+            StandaloneTerminalException(
+                buildString {
+                    appendLine("MoeMusic standalone could not open a text terminal.")
+                    appendLine("Lanterna needs a controlling TTY for its Unix backend, but this process has none.")
+                    appendLine()
+                    appendLine("Recommended:")
+                    appendLine("  ../shared/gradlew -p . installDist")
+                    appendLine("  ./build/install/moemusic-standalone/bin/moemusic-standalone")
+                    appendLine()
+                    appendLine("Alternatives:")
+                    appendLine("  Use --terminal swing on desktop systems.")
+                    appendLine("  Use --terminal text only when running from a real terminal, not a detached Gradle/IDE process.")
+                    append("Cause: ")
+                    append(cause.message ?: cause.javaClass.simpleName)
+                },
+                cause,
+            )
+
+        private fun isAwtHeadless(): Boolean =
+            runCatching { GraphicsEnvironment.isHeadless() }.getOrDefault(true)
     }
 }
