@@ -37,5 +37,16 @@ Terminal mode can be selected explicitly:
 ./build/install/moemusic-standalone/bin/moemusic-standalone --terminal swing
 ```
 
+Optional TUI features:
+
+```bash
+./build/install/moemusic-standalone/bin/moemusic-standalone --mouse off
+./build/install/moemusic-standalone/bin/moemusic-standalone --cover off
+```
+
+Mouse support defaults to `auto` and depends on the terminal emitting mouse events. Cover display
+defaults to Unicode half-block rendering and falls back to an inline placeholder when a cover is
+missing, blocked by client media policy, or fails to decode.
+
 Plugins can be placed under `<config-dir>/plugins/`, matching the shared core plugin discovery
 layout.

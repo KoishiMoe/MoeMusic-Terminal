@@ -10,7 +10,7 @@ fun main(args: Array<String>) {
     options.configDir.createDirectories()
 
     val terminal = try {
-        StandaloneTui.createTerminal(options.terminalMode)
+        StandaloneTui.createTerminal(options.terminalMode, options.mouseMode)
     } catch (e: StandaloneTerminalException) {
         System.err.println(e.message)
         exitProcess(2)
@@ -19,7 +19,14 @@ fun main(args: Array<String>) {
     try {
         StandaloneApplication(options.configDir).use { app ->
             app.start()
-            StandaloneTui(app, terminal).run()
+            StandaloneTui(
+                app = app,
+                terminal = terminal,
+                options = StandaloneTui.Options(
+                    mouseMode = options.mouseMode,
+                    coverMode = options.coverMode,
+                ),
+            ).run()
         }
     } catch (e: StandaloneTerminalException) {
         System.err.println(e.message)
@@ -30,11 +37,15 @@ fun main(args: Array<String>) {
 data class StandaloneOptions(
     val configDir: Path = defaultConfigDir(),
     val terminalMode: TerminalMode = TerminalMode.AUTO,
+    val mouseMode: MouseMode = MouseMode.AUTO,
+    val coverMode: CoverMode = CoverMode.AUTO,
 ) {
     companion object {
         fun parse(args: Array<String>): StandaloneOptions? {
             var configDir = defaultConfigDir()
             var terminalMode = TerminalMode.AUTO
+            var mouseMode = MouseMode.AUTO
+            var coverMode = CoverMode.AUTO
             var index = 0
             while (index < args.size) {
                 when (val arg = args[index]) {
@@ -57,11 +68,25 @@ data class StandaloneOptions(
                         index += 1
                     }
 
+                    "--mouse" -> {
+                        val value = args.getOrNull(index + 1)
+                            ?: error("--mouse requires one of: auto, on, off")
+                        mouseMode = MouseMode.parse(value)
+                        index += 1
+                    }
+
+                    "--cover" -> {
+                        val value = args.getOrNull(index + 1)
+                            ?: error("--cover requires one of: auto, unicode, off")
+                        coverMode = CoverMode.parse(value)
+                        index += 1
+                    }
+
                     else -> error("Unknown argument: $arg")
                 }
                 index += 1
             }
-            return StandaloneOptions(configDir, terminalMode)
+            return StandaloneOptions(configDir, terminalMode, mouseMode, coverMode)
         }
 
         private fun printHelp() {
@@ -72,10 +97,46 @@ data class StandaloneOptions(
                 Options:
                   --config-dir <path>   Config directory. Defaults to the OS config directory.
                   --terminal <mode>     Terminal mode: auto, text, or swing. Defaults to auto.
+                  --mouse <mode>        Mouse mode: auto, on, or off. Defaults to auto.
+                  --cover <mode>        Cover display: auto, unicode, or off. Defaults to auto.
                   -h, --help            Show this help.
                 """.trimIndent(),
             )
         }
+    }
+}
+
+enum class MouseMode {
+    AUTO,
+    ON,
+    OFF,
+    ;
+
+    companion object {
+        fun parse(value: String): MouseMode =
+            when (value.trim().lowercase()) {
+                "auto" -> AUTO
+                "on", "true", "yes" -> ON
+                "off", "false", "no" -> OFF
+                else -> error("Unknown mouse mode '$value'. Expected one of: auto, on, off")
+            }
+    }
+}
+
+enum class CoverMode {
+    AUTO,
+    UNICODE,
+    OFF,
+    ;
+
+    companion object {
+        fun parse(value: String): CoverMode =
+            when (value.trim().lowercase()) {
+                "auto" -> AUTO
+                "unicode", "text" -> UNICODE
+                "off", "false", "no" -> OFF
+                else -> error("Unknown cover mode '$value'. Expected one of: auto, unicode, off")
+            }
     }
 }
 
