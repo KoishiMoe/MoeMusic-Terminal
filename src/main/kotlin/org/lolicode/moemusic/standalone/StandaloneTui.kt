@@ -77,6 +77,7 @@ class StandaloneTui(
 
     private data class HitRegion(
         val rect: Rect,
+        val activateOnPress: Boolean = false,
         val onClick: (Int, Int) -> Unit,
     )
 
@@ -109,6 +110,8 @@ class StandaloneTui(
     private var seekPreviewProgress: Float? = null
     private var lastSearchListRect: Rect? = null
     private var lastQueueListRect: Rect? = null
+    private var pendingClickRegion: HitRegion? = null
+    private var ignoreMouseEventsUntilNanos = 0L
     @Volatile
     private var searchLoading = false
 
@@ -117,6 +120,7 @@ class StandaloneTui(
         screen.startScreen()
         screen.cursorPosition = null
         screen.clear()
+        suppressMouseEvents()
         requestQueue()
 
         try {
@@ -124,6 +128,8 @@ class StandaloneTui(
                 if (screen.doResizeIfNecessary() != null) {
                     needsClear = true
                     forceCompleteRefresh = true
+                    resetMouseState()
+                    suppressMouseEvents()
                 }
                 var key = screen.pollInput()
                 while (key != null) {
@@ -226,17 +232,25 @@ class StandaloneTui(
 
     private fun handleMouse(mouse: MouseAction) {
         if (options.mouseMode == MouseMode.OFF) return
+        if (isSuppressingMouseEvents()) return
         val x = mouse.position.column
         val y = mouse.position.row
         when (mouse.actionType) {
             MouseActionType.SCROLL_UP -> scrollAt(x, y, -3)
             MouseActionType.SCROLL_DOWN -> scrollAt(x, y, 3)
             MouseActionType.DRAG -> updateDrag(x)
-            MouseActionType.CLICK_RELEASE -> finishDrag(x)
+            MouseActionType.CLICK_RELEASE -> finishClickOrDrag(x, y)
             MouseActionType.CLICK_DOWN -> {
-                activeDrag = null
-                activeDragRect = null
-                hitRegions.asReversed().firstOrNull { it.rect.contains(x, y) }?.onClick?.invoke(x, y)
+                resetActiveDrag()
+                pendingClickRegion = null
+                if (mouse.button == LEFT_MOUSE_BUTTON) {
+                    val hit = hitRegions.asReversed().firstOrNull { it.rect.contains(x, y) }
+                    if (hit?.activateOnPress == true) {
+                        hit.onClick(x, y)
+                    } else {
+                        pendingClickRegion = hit
+                    }
+                }
             }
 
             MouseActionType.MOVE -> Unit
@@ -593,6 +607,41 @@ class StandaloneTui(
         activeDrag = null
         activeDragRect = null
     }
+
+    private fun finishClickOrDrag(x: Int, y: Int) {
+        if (activeDrag != null) {
+            finishDrag(x)
+            pendingClickRegion = null
+            return
+        }
+        val hit = pendingClickRegion
+        pendingClickRegion = null
+        if (hit?.rect?.contains(x, y) == true) {
+            hit.onClick(x, y)
+        }
+    }
+
+    private fun resetMouseState() {
+        hitRegions = emptyList()
+        lastSearchListRect = null
+        lastQueueListRect = null
+        pendingClickRegion = null
+        resetActiveDrag()
+    }
+
+    private fun resetActiveDrag() {
+        activeDrag = null
+        activeDragRect = null
+        seekPreviewProgress = null
+    }
+
+    private fun suppressMouseEvents() {
+        // Mouse tracking can emit stale press/release events while entering private mode or resizing.
+        ignoreMouseEventsUntilNanos = System.nanoTime() + MOUSE_SUPPRESSION_NANOS
+    }
+
+    private fun isSuppressingMouseEvents(): Boolean =
+        System.nanoTime() < ignoreMouseEventsUntilNanos
 
     private fun render(screen: TerminalScreen) {
         val size = screen.terminalSize
@@ -1402,7 +1451,7 @@ class StandaloneTui(
 
     private fun addHitAt(rect: Rect, action: (Int, Int) -> Unit) {
         if (rect.width > 0 && rect.height > 0) {
-            nextHitRegions += HitRegion(rect, action)
+            nextHitRegions += HitRegion(rect, activateOnPress = true, onClick = action)
         }
     }
 
@@ -1593,6 +1642,8 @@ class StandaloneTui(
         private const val WIDE_LAYOUT_MIN_WIDTH = 112
         private const val SEARCH_ROW_HEIGHT = 2
         private const val QUEUE_ROW_HEIGHT = 2
+        private const val LEFT_MOUSE_BUTTON = 1
+        private const val MOUSE_SUPPRESSION_NANOS = 350_000_000L
         private const val SEARCH_PAGE_SIZE = 40
         private const val SEARCH_PREFETCH_THRESHOLD = 6
         private const val EXPANDED_CONTROL_MIN_HEIGHT = 12
