@@ -141,6 +141,7 @@ class StandaloneClientRuntime(
 
     private lateinit var channel: InMemoryNetworkChannel
     private var syncJob: Job? = null
+    private var playbackLockRetryJob: Job? = null
 
     @Volatile
     var currentContext: TrackContext? = null
@@ -276,6 +277,7 @@ class StandaloneClientRuntime(
     fun stop() {
         syncJob?.cancel()
         syncJob = null
+        stopPlaybackLockRetry()
         InstancePlaybackLock.release()
         audioRuntime.stop()
         clearConnectionState(RuntimeException("Standalone runtime stopped."))
@@ -334,6 +336,7 @@ class StandaloneClientRuntime(
             sendClientStateChange(ClientStateProto.CLIENT_STATE_STANDBY)
             stopActivePlayback(fireEvent = true)
             InstancePlaybackLock.release()
+            stopPlaybackLockRetry()
             syncJob?.cancel()
             syncJob = null
         }
@@ -583,12 +586,50 @@ class StandaloneClientRuntime(
     }
 
     private fun ensurePlaybackLock(): Boolean {
-        if (!ModConfigManager.config.client.globalInstancePlaybackLock) return true
-        if (InstancePlaybackLock.tryAcquire()) return true
+        if (!ModConfigManager.config.client.globalInstancePlaybackLock) {
+            stopPlaybackLockRetry()
+            return true
+        }
+        if (InstancePlaybackLock.tryAcquire()) {
+            stopPlaybackLockRetry()
+            return true
+        }
+        enterPlaybackLockStandby()
+        return false
+    }
+
+    private fun enterPlaybackLockStandby() {
         setStatus("Playback standby: another MoeMusic instance owns the local audio lock")
         sendClientStateChange(ClientStateProto.CLIENT_STATE_STANDBY)
         stopActivePlayback(fireEvent = true)
-        return false
+        startPlaybackLockRetry()
+    }
+
+    private fun startPlaybackLockRetry() {
+        if (playbackLockRetryJob?.isActive == true) return
+        playbackLockRetryJob = scope.launch {
+            while (isActive) {
+                delay(LOCK_RETRY_INTERVAL_MS.milliseconds)
+                if (!participationRequested || !serverHandshakeReceived) return@launch
+                if (playbackRegistrationActive) return@launch
+                if (!ModConfigManager.config.client.playbackEnabled) return@launch
+
+                val lockAvailable = !ModConfigManager.config.client.globalInstancePlaybackLock ||
+                    InstancePlaybackLock.probeAvailable()
+                if (lockAvailable) {
+                    setStatus("Playback lock available; resuming local audio")
+                    playbackLockRetryJob = null
+                    sendClientStateChange(ClientStateProto.CLIENT_STATE_ACTIVE)
+                    startSyncLoop()
+                    return@launch
+                }
+            }
+        }
+    }
+
+    private fun stopPlaybackLockRetry() {
+        playbackLockRetryJob?.cancel()
+        playbackLockRetryJob = null
     }
 
     private fun stopActivePlayback(fireEvent: Boolean) {
@@ -826,5 +867,6 @@ class StandaloneClientRuntime(
 
     private companion object {
         private const val SYNC_INTERVAL_MS = 30_000L
+        private const val LOCK_RETRY_INTERVAL_MS = 1_000L
     }
 }
