@@ -112,7 +112,7 @@ data class StandaloneOptions(
 
                     "--cover" -> {
                         val value = args.getOrNull(index + 1)
-                            ?: error("--cover requires one of: auto, unicode, off")
+                            ?: error("--cover requires one of: auto, terminal, kitty, unicode, off")
                         coverMode = CoverMode.parse(value)
                         index += 1
                     }
@@ -133,7 +133,7 @@ data class StandaloneOptions(
                   --config-dir <path>   Config directory. Defaults to the OS config directory.
                   --terminal <mode>     Terminal mode: auto, text, or swing. Defaults to auto.
                   --mouse <mode>        Mouse mode: auto, on, or off. Defaults to auto.
-                  --cover <mode>        Cover display: auto, unicode, or off. Defaults to auto.
+                  --cover <mode>        Cover display: auto, terminal, kitty, unicode, or off. Defaults to auto.
                   -h, --help            Show this help.
                 """.trimIndent(),
             )
@@ -160,6 +160,8 @@ enum class MouseMode {
 
 enum class CoverMode {
     AUTO,
+    TERMINAL,
+    KITTY,
     UNICODE,
     OFF,
     ;
@@ -168,9 +170,11 @@ enum class CoverMode {
         fun parse(value: String): CoverMode =
             when (value.trim().lowercase()) {
                 "auto" -> AUTO
+                "terminal", "image", "images" -> TERMINAL
+                "kitty" -> KITTY
                 "unicode", "text" -> UNICODE
                 "off", "false", "no" -> OFF
-                else -> error("Unknown cover mode '$value'. Expected one of: auto, unicode, off")
+                else -> error("Unknown cover mode '$value'. Expected one of: auto, terminal, kitty, unicode, off")
             }
     }
 }

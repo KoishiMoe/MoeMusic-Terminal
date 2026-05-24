@@ -130,10 +130,12 @@ class StandaloneTui(
                 }
                 render(screen)
                 screen.refresh(if (forceCompleteRefresh) Screen.RefreshType.COMPLETE else Screen.RefreshType.DELTA)
+                coverRenderer.flushTerminalGraphics(terminal)
                 forceCompleteRefresh = false
                 Thread.sleep(250)
             }
         } finally {
+            coverRenderer.clearTerminalGraphics(terminal)
             screen.stopScreen()
         }
     }
@@ -551,8 +553,10 @@ class StandaloneTui(
         val graphics = screen.newTextGraphics()
         if (needsClear) {
             screen.clear()
+            coverRenderer.invalidateTerminalGraphics()
             needsClear = false
         }
+        coverRenderer.beginFrame(terminal, options.coverMode)
         clearVirtualFrame(graphics, width, height)
 
         val helpLines = helpLines(width)

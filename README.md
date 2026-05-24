@@ -42,11 +42,15 @@ Optional TUI features:
 ```bash
 ./build/install/moemusic-standalone/bin/moemusic-standalone --mouse off
 ./build/install/moemusic-standalone/bin/moemusic-standalone --cover off
+./build/install/moemusic-standalone/bin/moemusic-standalone --cover kitty
 ```
 
 Mouse support defaults to `auto` and depends on the terminal emitting mouse events. Cover display
-defaults to Unicode half-block rendering and falls back to an inline placeholder when a cover is
-missing, blocked by client media policy, or fails to decode.
+defaults to terminal images on known Kitty-protocol terminals, otherwise Unicode half-block
+rendering. Use `--cover kitty` to force Kitty graphics, `--cover terminal` for conservative
+terminal-image detection, `--cover unicode` for text rendering, or `--cover off` to disable covers.
+Covers still fall back to an inline placeholder when a cover is missing, blocked by client media
+policy, or fails to decode.
 
 Runtime logs are written to `<config-dir>/standalone.log` while the TUI is active so background
 warnings do not corrupt the terminal screen.
