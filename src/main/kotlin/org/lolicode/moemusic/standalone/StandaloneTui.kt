@@ -609,7 +609,7 @@ class StandaloneTui(
             val nowWidth = (content.width * 36 / 100).coerceIn(34, 48)
             val nowRect = Rect(content.x, content.y, nowWidth, content.height)
             val mainRect = Rect(content.x + nowWidth, content.y, content.width - nowWidth, content.height)
-            drawNowPlayingPane(graphics, nowRect, compact = false)
+            drawNowPlayingPane(graphics, nowRect, compact = false, showInlineLyric = currentTab != Tab.NOW_PLAYING)
             if (currentTab == Tab.NOW_PLAYING) {
                 drawNowPlayingDetailsPane(graphics, mainRect)
             } else {
@@ -651,7 +651,12 @@ class StandaloneTui(
         drawPlaybackProgress(graphics, Rect(rect.x + 1, rect.y + 3, rect.width - 2, 1), interactive = false)
     }
 
-    private fun drawNowPlayingPane(graphics: TextGraphics, rect: Rect, compact: Boolean) {
+    private fun drawNowPlayingPane(
+        graphics: TextGraphics,
+        rect: Rect,
+        compact: Boolean,
+        showInlineLyric: Boolean = true,
+    ) {
         drawPanel(graphics, rect, "Now Playing")
         val body = rect.inset(1)
         if (body.width <= 0 || body.height <= 0) return
@@ -703,7 +708,7 @@ class StandaloneTui(
         val position = app.client.currentPositionMs(ctx)
         putText(graphics, textX, textY + 4, textWidth, "${formatTime(position)} / ${formatTime(track.durationMs)}", MUTED, PANEL_BG)
 
-        app.client.currentLyricLine()?.let { lyric ->
+        inlineLyricText(track, position)?.takeIf { showInlineLyric }?.let { lyric ->
             val lyricY = (body.bottom - 5).coerceAtLeast(textY + 6)
             if (lyricY < body.bottom - 3) {
                 putText(graphics, body.x, lyricY, body.width, lyric, LYRIC, PANEL_BG)
@@ -1050,9 +1055,9 @@ class StandaloneTui(
         if (rect.width <= 0 || rect.height <= 0) return
         val percent = app.client.playbackService.effectiveVolumePercent
         val label = "Vol $percent%"
-        drawBar(graphics, rect, percent / 100f, VOLUME_BG, VOLUME_FG, label)
+        val barRect = drawBar(graphics, rect, percent / 100f, VOLUME_BG, VOLUME_FG, label)
         if (interactive) {
-            addHitAt(rect) { x, _ -> beginDrag(DragTarget.VOLUME, rect, x) }
+            addHitAt(barRect) { x, _ -> beginDrag(DragTarget.VOLUME, barRect, x) }
         }
     }
 
@@ -1067,9 +1072,9 @@ class StandaloneTui(
             0f
         }
         val label = "${formatTime(position)} / ${formatTime(duration)}"
-        drawBar(graphics, rect, progress, BAR_BG, if (ctx?.state is PlaybackState.Paused) PAUSED else ACCENT, label)
+        val barRect = drawBar(graphics, rect, progress, BAR_BG, if (ctx?.state is PlaybackState.Paused) PAUSED else ACCENT, label)
         if (interactive && duration > 0) {
-            addHitAt(rect) { x, _ -> beginDrag(DragTarget.SEEK, rect, x) }
+            addHitAt(barRect) { x, _ -> beginDrag(DragTarget.SEEK, barRect, x) }
         }
     }
 
@@ -1143,16 +1148,22 @@ class StandaloneTui(
         background: TextColor,
         foreground: TextColor,
         label: String,
-    ) {
-        val filled = (rect.width * progress.coerceIn(0f, 1f)).roundToInt().coerceIn(0, rect.width)
-        fillRect(graphics, rect, background)
-        if (filled > 0) {
-            fillRect(graphics, Rect(rect.x, rect.y, filled, rect.height), foreground)
-        }
+    ): Rect {
         val labelText = " $label "
         val labelWidth = columnWidth(labelText)
-        val labelX = rect.x + ((rect.width - labelWidth) / 2).coerceAtLeast(0)
-        putText(graphics, labelX, rect.y, minOf(labelWidth, rect.right - labelX + 1), labelText, TEXT, TextColor.ANSI.DEFAULT)
+        val showLabel = rect.width >= labelWidth + MIN_BAR_WIDTH
+        val barRect = if (showLabel) {
+            putText(graphics, rect.x, rect.y, labelWidth, labelText, TEXT, PANEL_BG)
+            Rect(rect.x + labelWidth, rect.y, rect.width - labelWidth, rect.height)
+        } else {
+            rect
+        }
+        val filled = (barRect.width * progress.coerceIn(0f, 1f)).roundToInt().coerceIn(0, barRect.width)
+        fillRect(graphics, barRect, background)
+        if (filled > 0) {
+            fillRect(graphics, Rect(barRect.x, barRect.y, filled, barRect.height), foreground)
+        }
+        return barRect
     }
 
     private fun fillRect(graphics: TextGraphics, rect: Rect, background: TextColor) {
@@ -1195,6 +1206,22 @@ class StandaloneTui(
 
     private fun columnWidth(text: String): Int =
         TerminalTextUtils.getColumnWidth(text.sanitizeForTerminal())
+
+    private fun inlineLyricText(track: TrackInfo, positionMs: Long): String? {
+        val primary = parseLyrics(track.lyricLrc)
+            ?.lineAt(positionMs)
+            ?.text
+            ?.takeIf { it.isNotBlank() }
+        val secondary = parseLyrics(track.secondaryLyricLrc)
+            ?.lineAt(positionMs)
+            ?.text
+            ?.takeIf { it.isNotBlank() }
+        return when {
+            primary != null && secondary != null -> "$primary / $secondary"
+            primary != null -> primary
+            else -> secondary
+        }
+    }
 
     private fun String.sanitizeForTerminal(): String =
         replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
@@ -1401,6 +1428,7 @@ class StandaloneTui(
         private const val WIDE_LAYOUT_MIN_WIDTH = 112
         private const val SEARCH_ROW_HEIGHT = 2
         private const val QUEUE_ROW_HEIGHT = 2
+        private const val MIN_BAR_WIDTH = 8
         private const val LAST_COLUMN_WRAP_GUARD = 0 // 1
 
         private val TEXT = TextColor.RGB(234, 237, 243)
