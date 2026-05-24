@@ -134,7 +134,7 @@ internal class StandaloneCoverArtRenderer(
             return
         }
 
-        if (rendered != null && !rendered.samePlacementAs(request)) {
+        if (rendered != null && (terminalImageInvalidated || !rendered.samePlacementAs(request))) {
             deleteTerminalImage(terminal, rendered)
         }
         writeTerminalImage(terminal, request)
