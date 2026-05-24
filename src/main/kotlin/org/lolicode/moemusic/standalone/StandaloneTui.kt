@@ -46,6 +46,7 @@ class StandaloneTui(
     private var promptMode: PromptMode? = null
     private val promptBuffer = StringBuilder()
     private var needsClear = true
+    private var forceCompleteRefresh = true
 
     fun run() {
         val screen = TerminalScreen(terminal)
@@ -58,6 +59,7 @@ class StandaloneTui(
             while (running.get()) {
                 if (screen.doResizeIfNecessary() != null) {
                     needsClear = true
+                    forceCompleteRefresh = true
                 }
                 var key = screen.pollInput()
                 while (key != null) {
@@ -65,7 +67,8 @@ class StandaloneTui(
                     key = screen.pollInput()
                 }
                 render(screen)
-                screen.refresh(Screen.RefreshType.DELTA)
+                screen.refresh(if (forceCompleteRefresh) Screen.RefreshType.COMPLETE else Screen.RefreshType.DELTA)
+                forceCompleteRefresh = false
                 Thread.sleep(250)
             }
         } finally {
@@ -248,6 +251,7 @@ class StandaloneTui(
             screen.clear()
             needsClear = false
         }
+        clearVirtualFrame(graphics, width, height)
 
         var y = 0
         putLine(graphics, y++, width, "MoeMusic Standalone", TextColor.ANSI.CYAN, SGR.BOLD)
@@ -284,6 +288,18 @@ class StandaloneTui(
         }
         helpLines.forEachIndexed { index, line ->
             putLine(graphics, height - helpLines.size + index, width, line, TextColor.ANSI.WHITE)
+        }
+    }
+
+    private fun clearVirtualFrame(
+        graphics: com.googlecode.lanterna.graphics.TextGraphics,
+        width: Int,
+        height: Int,
+    ) {
+        graphics.foregroundColor = TextColor.ANSI.WHITE
+        val blank = " ".repeat(width)
+        for (row in 0 until height) {
+            graphics.putString(0, row, blank)
         }
     }
 
