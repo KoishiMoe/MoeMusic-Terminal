@@ -24,4 +24,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "moemusic-standalone"
 
-includeBuild("../shared")
+val sharedBuildDir = file("../shared")
+if (sharedBuildDir.resolve("settings.gradle.kts").isFile) {
+    includeBuild(sharedBuildDir)
+}
