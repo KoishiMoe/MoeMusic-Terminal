@@ -630,13 +630,11 @@ class StandaloneTui(
 
     private fun drawHeader(graphics: TextGraphics, width: Int) {
         fillRect(graphics, Rect(0, 0, width, 1), HEADER_BG)
-        val volume = app.client.playbackService.effectiveVolumePercent
-        val source = currentSearchSourceName().ifBlank { "no source" }
         val status = app.client.statusMessage
         val header = if (width >= 100) {
-            " MoeMusic Standalone | vol $volume% | source $source | $status"
+            " MoeMusic Standalone | $status"
         } else {
-            " MoeMusic | vol $volume% | $status"
+            " MoeMusic | $status"
         }
         putText(graphics, 0, 0, width, header, HEADER_FG, HEADER_BG, SGR.BOLD)
     }
