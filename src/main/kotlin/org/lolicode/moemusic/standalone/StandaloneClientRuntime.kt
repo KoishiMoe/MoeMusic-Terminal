@@ -127,6 +127,7 @@ class StandaloneClientRuntime(
     private val pendingQueueRemoveResponses = PendingRequestRegistry<QueueRemoveResponse>()
     private val pendingPlaybackControlResponses = PendingRequestRegistry<PlaybackControlResponse>()
     private val pendingContentFilterActionResponses = PendingRequestRegistry<ContentFilterActionResponse>()
+    private var latestSearchResponseRequestId: Long = 0L
 
     private val ringBuffer = PcmRingBuffer()
     private val loader = LavaPlayerTrackLoader()
@@ -156,7 +157,26 @@ class StandaloneClientRuntime(
         private set
 
     @Volatile
+    private var rawSearchResults: List<SelectionEntry> = emptyList()
+
+    @Volatile
     var searchQuery: String = ""
+        private set
+
+    @Volatile
+    var searchResultSourceId: String = ""
+        private set
+
+    @Volatile
+    var searchLoadedCount: Int = 0
+        private set
+
+    @Volatile
+    var searchTotal: Int = -1
+        private set
+
+    @Volatile
+    var searchHasMore: Boolean = false
         private set
 
     @Volatile
@@ -358,11 +378,38 @@ class StandaloneClientRuntime(
     }
 
     private fun handleSearchResponse(msg: SearchResponse) {
+        if (msg.request_id == 0L || msg.request_id >= latestSearchResponseRequestId) {
+            latestSearchResponseRequestId = msg.request_id
+            val pageEntries = msg.entries.map { it.toApi() }
+            val failure = msg.failure.ifEmpty { null }
+            val sameSearch = searchQuery == msg.query && searchResultSourceId == msg.source_id
+            rawSearchResults = when {
+                msg.offset <= 0 -> pageEntries
+                !sameSearch -> pageEntries
+                failure != null -> rawSearchResults
+                msg.offset <= rawSearchResults.size -> rawSearchResults.take(msg.offset) + pageEntries
+                else -> rawSearchResults + pageEntries
+            }
+            searchResults = visibleSearchResults(rawSearchResults)
+            searchLoadedCount = rawSearchResults.size
+            searchTotal = msg.total
+            searchHasMore = msg.has_more
+            searchFailure = failure
+            searchQuery = msg.query
+            searchResultSourceId = msg.source_id
+            setStatus(
+                searchFailure ?: buildString {
+                    append("Search loaded ")
+                    append(searchLoadedCount)
+                    if (searchTotal >= 0) {
+                        append("/")
+                        append(searchTotal)
+                    }
+                    append(" result(s)")
+                },
+            )
+        }
         pendingSearchResponses.complete(msg.request_id, msg)
-        searchQuery = msg.query
-        searchResults = visibleSearchResults(msg.entries.map { it.toApi() })
-        searchFailure = msg.failure.ifEmpty { null }
-        setStatus(searchFailure ?: "Search returned ${searchResults.size} result(s)")
     }
 
     private fun handleQueueResponse(msg: QueueResponse) {
@@ -380,7 +427,13 @@ class StandaloneClientRuntime(
     private fun handleIdentifierSubmitResponse(msg: IdentifierSubmitResponse) {
         pendingIdentifierSubmitResponses.complete(msg.request_id, msg)
         if (msg.choices.isNotEmpty()) {
-            searchResults = visibleSearchResults(msg.choices.map { it.toApi() })
+            rawSearchResults = msg.choices.map { it.toApi() }
+            searchResults = visibleSearchResults(rawSearchResults)
+            searchLoadedCount = rawSearchResults.size
+            searchTotal = rawSearchResults.size
+            searchHasMore = false
+            searchQuery = ""
+            searchResultSourceId = rawSearchResults.firstOrNull()?.sourceId.orEmpty()
             searchFailure = null
             setStatus("Identifier returned ${searchResults.size} choice(s)")
         } else {
@@ -392,7 +445,13 @@ class StandaloneClientRuntime(
     private fun handleSelectionSubmitResponse(msg: SelectionSubmitResponse) {
         pendingSelectionSubmitResponses.complete(msg.request_id, msg)
         if (msg.choices.isNotEmpty()) {
-            searchResults = visibleSearchResults(msg.choices.map { it.toApi() })
+            rawSearchResults = msg.choices.map { it.toApi() }
+            searchResults = visibleSearchResults(rawSearchResults)
+            searchLoadedCount = rawSearchResults.size
+            searchTotal = rawSearchResults.size
+            searchHasMore = false
+            searchQuery = ""
+            searchResultSourceId = rawSearchResults.firstOrNull()?.sourceId.orEmpty()
             searchFailure = null
             setStatus("Selection returned ${searchResults.size} choice(s)")
         } else {
@@ -419,7 +478,7 @@ class StandaloneClientRuntime(
     }
 
     fun refreshVisibleContentFilterState() {
-        searchResults = visibleSearchResults(searchResults)
+        searchResults = visibleSearchResults(rawSearchResults)
         queueTracks = visibleQueueTracks(queueTracks)
     }
 
@@ -444,6 +503,7 @@ class StandaloneClientRuntime(
         val playback = msg.playback?.toApi() ?: return
         val track = trackProto.toApi().withLyrics(msg.lyric_lrc, msg.secondary_lyric_lrc)
         startPlayback(track, playback, msg.server_start_monotonic, fromSyncState = false, pausedPositionMs = null)
+        requestQueueRefresh()
     }
 
     private fun handleSyncState(msg: SyncState) {

@@ -17,16 +17,10 @@ import com.googlecode.lanterna.terminal.Terminal
 import kotlinx.coroutines.launch
 import org.lolicode.moemusic.api.client.ContentFilterMutationTarget
 import org.lolicode.moemusic.api.debugString
-import org.lolicode.moemusic.api.model.PlaybackState
-import org.lolicode.moemusic.api.model.SearchQuery
-import org.lolicode.moemusic.api.model.SelectionEntry
-import org.lolicode.moemusic.api.model.TrackAddMode
-import org.lolicode.moemusic.api.model.TrackInfo
-import org.lolicode.moemusic.api.model.artistDisplay
-import org.lolicode.moemusic.api.model.directTrackId
+import org.lolicode.moemusic.api.model.*
 import org.lolicode.moemusic.api.service.PlaybackAction
 import org.lolicode.moemusic.core.config.ClientVolume
-import org.lolicode.moemusic.core.config.ModConfigManager
+import org.lolicode.moemusic.core.playback.ParsedLyrics
 import org.lolicode.moemusic.core.playback.parseLyrics
 import java.awt.GraphicsEnvironment
 import java.io.IOException
@@ -92,6 +86,12 @@ class StandaloneTui(
         val action: () -> Unit,
     )
 
+    private data class LyricDisplayRow(
+        val text: String,
+        val color: TextColor,
+        val modifier: SGR? = null,
+    )
+
     private val running = AtomicBoolean(true)
     private val coverRenderer = StandaloneCoverArtRenderer(app.scope)
     private var currentTab = Tab.NOW_PLAYING
@@ -109,6 +109,8 @@ class StandaloneTui(
     private var seekPreviewProgress: Float? = null
     private var lastSearchListRect: Rect? = null
     private var lastQueueListRect: Rect? = null
+    @Volatile
+    private var searchLoading = false
 
     fun run() {
         val screen = TerminalScreen(terminal)
@@ -209,6 +211,7 @@ class StandaloneTui(
             'b' -> blockActiveTrack()
             'r' -> requestQueue()
             'x' -> removeSelectedQueueTrack()
+            'm' -> requestMoreSearchResults()
             ' ' -> togglePause()
             'n' -> playbackControl(PlaybackAction.SKIP)
             's' -> playbackControl(PlaybackAction.STOP)
@@ -266,6 +269,7 @@ class StandaloneTui(
             Tab.SEARCH -> {
                 val size = app.client.searchResults.size
                 selectedSearchIndex = if (size == 0) 0 else (selectedSearchIndex + delta).coerceIn(0, size - 1)
+                maybeLoadMoreSearchResults()
             }
 
             Tab.QUEUE -> {
@@ -292,18 +296,70 @@ class StandaloneTui(
     }
 
     private fun search(query: String) {
-        app.client.setStatus("Searching...")
+        val sourceId = currentSearchSourceId()
+        if (sourceId.isNullOrBlank()) {
+            app.client.setStatus("No searchable sources")
+            return
+        }
+        selectedSearchIndex = 0
+        requestSearchPage(query = query, sourceId = sourceId, offset = 0, resetSelection = true)
+    }
+
+    private fun requestMoreSearchResults() {
+        if (!canLoadMoreSearchResults()) return
+        val sourceId = app.client.searchResultSourceId.ifBlank { currentSearchSourceId().orEmpty() }
+        requestSearchPage(
+            query = app.client.searchQuery,
+            sourceId = sourceId,
+            offset = app.client.searchLoadedCount,
+            resetSelection = false,
+        )
+    }
+
+    private fun canLoadMoreSearchResults(): Boolean =
+        !searchLoading &&
+            app.client.searchQuery.isNotBlank() &&
+            app.client.searchHasMore &&
+            app.client.searchResultSourceId.isNotBlank() &&
+            app.client.searchResultSourceId == currentSearchSourceId().orEmpty()
+
+    private fun maybeLoadMoreSearchResults() {
+        if (!canLoadMoreSearchResults()) return
+        val results = app.client.searchResults
+        if (results.isEmpty() || selectedSearchIndex + SEARCH_PREFETCH_THRESHOLD >= results.size) {
+            requestMoreSearchResults()
+        }
+    }
+
+    private fun requestSearchPage(query: String, sourceId: String, offset: Int, resetSelection: Boolean) {
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.isBlank() || sourceId.isBlank() || searchLoading) return
+        val normalizedOffset = offset.coerceAtLeast(0)
+        searchLoading = true
+        app.client.setStatus(if (normalizedOffset == 0) "Searching..." else "Loading more search results...")
         app.scope.launch {
-            runCatching {
+            val result = runCatching {
                 app.client.requestService.search(
                     SearchQuery(
-                        query = query,
-                        sourceId = currentSearchSourceId(),
-                        limit = 40,
-                        offset = 0,
+                        query = normalizedQuery,
+                        sourceId = sourceId,
+                        limit = SEARCH_PAGE_SIZE,
+                        offset = normalizedOffset,
                     ),
                 )
-            }.onFailure { app.client.setStatus("Search failed: ${it.message}") }
+            }
+            result.onSuccess {
+                if (resetSelection) {
+                    selectedSearchIndex = 0
+                }
+                selectedSearchIndex = selectedSearchIndex.coerceSelection(app.client.searchResults.size)
+            }.onFailure {
+                app.client.setStatus("Search failed: ${it.message}")
+            }
+            searchLoading = false
+            if (result.isSuccess && app.client.searchLoadedCount > normalizedOffset) {
+                maybeLoadMoreSearchResults()
+            }
         }
     }
 
@@ -711,10 +767,10 @@ class StandaloneTui(
         val controlsHeight = if (expandedControls) 5 else 3
         val controls = bottomRect(body, controlsHeight)
 
-        inlineLyricText(track, position)?.takeIf { showInlineLyric }?.let { lyric ->
-            val lyricY = (controls.y - 2).coerceAtLeast(textY + 5)
-            if (lyricY < controls.y) {
-                putText(graphics, body.x, lyricY, body.width, lyric, LYRIC, PANEL_BG)
+        inlineLyricRows(track, position).takeIf { showInlineLyric && it.isNotEmpty() }?.let { rows ->
+            val lyricY = (controls.y - rows.size).coerceAtLeast(textY + 5)
+            rows.take((controls.y - lyricY).coerceAtLeast(0)).forEachIndexed { index, row ->
+                putText(graphics, body.x, lyricY + index, body.width, row.text, row.color, PANEL_BG, row.modifier)
             }
         }
 
@@ -745,13 +801,6 @@ class StandaloneTui(
         y += lyricHeight + 2
         if (y > body.bottom) return
 
-        val remaining = body.bottom - y + 1
-        val detailsHeight = minOf(6, remaining)
-        drawSectionHeader(graphics, body.x, y, body.width, "Track")
-        drawTrackDetails(graphics, Rect(body.x, y + 1, body.width, detailsHeight - 1), ctx.track, ctx.state)
-        y += detailsHeight + 1
-        if (y > body.bottom) return
-
         drawUpcomingTracks(graphics, Rect(body.x, y, body.width, body.bottom - y + 1))
     }
 
@@ -761,67 +810,59 @@ class StandaloneTui(
 
     private fun drawLyricPreview(graphics: TextGraphics, rect: Rect, track: TrackInfo, positionMs: Long) {
         if (rect.width <= 0 || rect.height <= 0) return
-        val parsed = parseLyrics(track.lyricLrc)
+        val primaryParsed = parseLyrics(track.lyricLrc)
+        val parsed = primaryParsed ?: parseLyrics(track.secondaryLyricLrc)
         if (parsed == null) {
             val message = if (track.lyricsFetched) "No lyrics available." else "Lyrics not loaded."
             putText(graphics, rect.x, rect.y, rect.width, message, MUTED, PANEL_BG)
             return
         }
+        val secondaryParsed = parseLyrics(track.secondaryLyricLrc).takeIf { primaryParsed != null }
 
         val effectiveMs = positionMs - parsed.offsetMs
         val activeIndex = parsed.lines.indexOfLast { it.startMs <= effectiveMs }
+        val rowsPerLine = if (secondaryParsed == null) 1 else 2
+        val visibleLyricLines = (rect.height / rowsPerLine).coerceAtLeast(1)
         val start = if (activeIndex < 0) {
             0
         } else {
-            (activeIndex - rect.height / 2)
+            (activeIndex - visibleLyricLines / 2)
                 .coerceAtLeast(0)
-                .coerceAtMost((parsed.lines.size - rect.height).coerceAtLeast(0))
+                .coerceAtMost((parsed.lines.size - visibleLyricLines).coerceAtLeast(0))
         }
-        val secondaryLine = parseLyrics(track.secondaryLyricLrc)
-            ?.lineAt(positionMs)
-            ?.text
-            ?.takeIf { it.isNotBlank() }
 
-        for (row in 0 until rect.height) {
-            val lineIndex = start + row
+        var row = 0
+        var lineIndex = start
+        while (row < rect.height) {
             val line = parsed.lines.getOrNull(lineIndex) ?: break
             val active = lineIndex == activeIndex
-            val text = if (active && secondaryLine != null) {
-                "${line.text} / $secondaryLine"
-            } else {
-                line.text
-            }
+            val primaryPrefix = "${if (active) ">" else " "} ${formatTime(line.startMs)}  "
             putText(
                 graphics,
                 rect.x,
                 rect.y + row,
                 rect.width,
-                "${if (active) ">" else " "} ${formatTime(line.startMs)}  $text",
+                "$primaryPrefix${line.text}",
                 if (active) LYRIC else MUTED,
                 PANEL_BG,
                 if (active) SGR.BOLD else null,
             )
-        }
-    }
-
-    private fun drawTrackDetails(graphics: TextGraphics, rect: Rect, track: TrackInfo, state: PlaybackState) {
-        if (rect.width <= 0 || rect.height <= 0) return
-        val lyricStatus = when {
-            parseLyrics(track.lyricLrc) != null -> "available"
-            track.lyricsFetched -> "unavailable"
-            else -> "not loaded"
-        }
-        val details = listOf(
-            "State" to playbackStateLabel(state),
-            "Album" to (track.album?.takeIf { it.isNotBlank() } ?: "-"),
-            "Source" to sourceDisplayName(track.sourceId).ifBlank { "-" },
-            "Duration" to formatTime(track.durationMs),
-            "Submitted" to (track.submittedByUserName?.takeIf { it.isNotBlank() } ?: "local"),
-            "Track ID" to track.id,
-            "Lyrics" to lyricStatus,
-        )
-        details.take(rect.height).forEachIndexed { index, (label, value) ->
-            putText(graphics, rect.x, rect.y + index, rect.width, "${label.padEnd(9)} $value", MUTED, PANEL_BG)
+            row += 1
+            val secondaryText = secondaryLyricTextAt(parsed, secondaryParsed, line.startMs)
+            if (secondaryText != null && row < rect.height) {
+                putText(
+                    graphics,
+                    rect.x,
+                    rect.y + row,
+                    rect.width,
+                    "${" ".repeat(columnWidth(primaryPrefix))}$secondaryText",
+                    if (active) LYRIC_SECONDARY else MUTED,
+                    PANEL_BG,
+                    if (active) SGR.BOLD else null,
+                )
+                row += 1
+            }
+            lineIndex += 1
         }
     }
 
@@ -864,27 +905,47 @@ class StandaloneTui(
 
         val hintX = sourceRect.x + sourceRect.width + 2
         val hint = if (body.width >= 78) {
-            "/ search   Enter/Add queues selected   p play now   o source"
+            "/ search   Enter/Add queues selected   p play now   o source   m more"
         } else {
-            "/ search  Enter add  p now"
+            "/ search  Enter add  p now  m more"
         }
         putText(graphics, hintX, body.y, (body.right - hintX + 1).coerceAtLeast(0), hint, MUTED, PANEL_BG)
 
         app.client.searchFailure?.let {
             putText(graphics, body.x, body.y + 1, body.width, it, ERROR, PANEL_BG)
-        } ?: putText(
-            graphics,
-            body.x,
-            body.y + 1,
-            body.width,
-            "Query: ${app.client.searchQuery.ifBlank { "-" }}   Results: ${app.client.searchResults.size}",
-            MUTED,
-            PANEL_BG,
-        )
+        } ?: run {
+            val loadLabel = when {
+                searchLoading -> " Loading "
+                canLoadMoreSearchResults() -> " More "
+                else -> null
+            }
+            val loadWidth = loadLabel?.length ?: 0
+            val summaryWidth = (body.width - loadWidth - if (loadLabel == null) 0 else 1).coerceAtLeast(0)
+            putText(graphics, body.x, body.y + 1, summaryWidth, searchSummaryText(), MUTED, PANEL_BG)
+            if (loadLabel != null && loadWidth > 0) {
+                val loadRect = Rect(body.right - loadWidth + 1, body.y + 1, loadWidth, 1)
+                putText(graphics, loadRect.x, loadRect.y, loadRect.width, loadLabel, TEXT, BUTTON_BG, SGR.BOLD)
+                if (!searchLoading) {
+                    addHit(loadRect) { requestMoreSearchResults() }
+                }
+            }
+        }
 
         val listRect = Rect(body.x, body.y + 3, body.width, (body.height - 3).coerceAtLeast(0))
         lastSearchListRect = listRect
         drawSearchRows(graphics, listRect)
+    }
+
+    private fun searchSummaryText(): String {
+        val query = app.client.searchQuery.ifBlank { "-" }
+        val total = if (app.client.searchTotal >= 0) app.client.searchTotal.toString() else "?"
+        val suffix = when {
+            searchLoading -> "   loading"
+            app.client.searchHasMore -> "   more available"
+            app.client.searchQuery.isNotBlank() -> "   all loaded"
+            else -> ""
+        }
+        return "Query: $query   Results: ${app.client.searchResults.size} visible, ${app.client.searchLoadedCount}/$total loaded$suffix"
     }
 
     private fun drawQueuePane(graphics: TextGraphics, rect: Rect) {
@@ -916,7 +977,14 @@ class StandaloneTui(
         val results = app.client.searchResults
         if (rect.height <= 0) return
         if (results.isEmpty()) {
-            putText(graphics, rect.x, rect.y, rect.width, "No search results yet. Press / to search.", MUTED, PANEL_BG)
+            val message = when {
+                searchLoading -> "Loading search results..."
+                app.client.searchQuery.isNotBlank() && app.client.searchHasMore ->
+                    "No visible results in loaded pages. Press m to load more."
+
+                else -> "No search results yet. Press / to search."
+            }
+            putText(graphics, rect.x, rect.y, rect.width, message, MUTED, PANEL_BG)
             return
         }
 
@@ -1291,7 +1359,7 @@ class StandaloneTui(
     private fun progressLabel(positionMs: Long, durationMs: Long): String =
         "Progress ${formatTime(positionMs)} / ${formatTime(durationMs)}"
 
-    private fun inlineLyricText(track: TrackInfo, positionMs: Long): String? {
+    private fun inlineLyricRows(track: TrackInfo, positionMs: Long): List<LyricDisplayRow> {
         val primary = parseLyrics(track.lyricLrc)
             ?.lineAt(positionMs)
             ?.text
@@ -1300,12 +1368,21 @@ class StandaloneTui(
             ?.lineAt(positionMs)
             ?.text
             ?.takeIf { it.isNotBlank() }
-        return when {
-            primary != null && secondary != null -> "$primary / $secondary"
-            primary != null -> primary
-            else -> secondary
+        return buildList {
+            if (primary != null) {
+                add(LyricDisplayRow(primary, LYRIC, SGR.BOLD))
+            }
+            if (secondary != null && secondary != primary) {
+                add(LyricDisplayRow(secondary, if (primary == null) LYRIC else LYRIC_SECONDARY))
+            }
         }
     }
+
+    private fun secondaryLyricTextAt(primaryLyrics: ParsedLyrics, secondaryLyrics: ParsedLyrics?, primaryStartMs: Long): String? =
+        secondaryLyrics
+            ?.lineAt(primaryStartMs + primaryLyrics.offsetMs)
+            ?.text
+            ?.takeIf { it.isNotBlank() }
 
     private fun String.sanitizeForTerminal(): String =
         replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
@@ -1390,6 +1467,7 @@ class StandaloneTui(
             "s stop",
             "+/- volume",
             "o source",
+            "m more",
             "r refresh",
             "x remove",
             "j/k move",
@@ -1517,6 +1595,8 @@ class StandaloneTui(
         private const val WIDE_LAYOUT_MIN_WIDTH = 112
         private const val SEARCH_ROW_HEIGHT = 2
         private const val QUEUE_ROW_HEIGHT = 2
+        private const val SEARCH_PAGE_SIZE = 40
+        private const val SEARCH_PREFETCH_THRESHOLD = 6
         private const val EXPANDED_CONTROL_MIN_HEIGHT = 12
         private const val LAST_COLUMN_WRAP_GUARD = 0 // 1
 
@@ -1548,6 +1628,7 @@ class StandaloneTui(
         private val WARM = TextColor.RGB(222, 184, 100)
         private val SOURCE = TextColor.RGB(97, 201, 176)
         private val LYRIC = TextColor.RGB(125, 218, 149)
+        private val LYRIC_SECONDARY = TextColor.RGB(151, 206, 226)
         private val ERROR = TextColor.RGB(245, 104, 104)
         private val PROMPT = TextColor.RGB(135, 213, 168)
     }
