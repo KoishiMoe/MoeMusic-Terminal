@@ -15,6 +15,7 @@ import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.googlecode.lanterna.terminal.MouseCaptureMode
 import com.googlecode.lanterna.terminal.Terminal
 import kotlinx.coroutines.launch
+import org.lolicode.moemusic.api.client.ContentFilterMutationTarget
 import org.lolicode.moemusic.api.debugString
 import org.lolicode.moemusic.api.model.PlaybackState
 import org.lolicode.moemusic.api.model.SearchQuery
@@ -22,6 +23,7 @@ import org.lolicode.moemusic.api.model.SelectionEntry
 import org.lolicode.moemusic.api.model.TrackAddMode
 import org.lolicode.moemusic.api.model.TrackInfo
 import org.lolicode.moemusic.api.model.artistDisplay
+import org.lolicode.moemusic.api.model.directTrackId
 import org.lolicode.moemusic.api.service.PlaybackAction
 import org.lolicode.moemusic.core.config.ClientVolume
 import org.lolicode.moemusic.core.config.ModConfigManager
@@ -82,6 +84,12 @@ class StandaloneTui(
     private data class HitRegion(
         val rect: Rect,
         val onClick: (Int, Int) -> Unit,
+    )
+
+    private data class ButtonSpec(
+        val label: String,
+        val background: TextColor,
+        val action: () -> Unit,
     )
 
     private val running = AtomicBoolean(true)
@@ -196,6 +204,7 @@ class StandaloneTui(
             'u' -> openPrompt(PromptMode.SUBMIT, currentTab)
             'a' -> submitSelectedSearchResult(TrackAddMode.NORMAL)
             'p' -> playSelectedNow()
+            'b' -> blockActiveTrack()
             'r' -> requestQueue()
             'x' -> removeSelectedQueueTrack()
             ' ' -> togglePause()
@@ -339,6 +348,93 @@ class StandaloneTui(
             }.onFailure { app.client.setStatus("Remove failed: ${it.message}") }
         }
     }
+
+    private fun blockActiveTrack() {
+        when (currentTab) {
+            Tab.NOW_PLAYING -> {
+                val track = app.client.currentContext?.track
+                if (track == null) {
+                    app.client.setStatus("No current track to block")
+                } else {
+                    blockTrack(track)
+                }
+            }
+
+            Tab.SEARCH -> {
+                val entry = app.client.searchResults.getOrNull(selectedSearchIndex)
+                if (entry == null) {
+                    app.client.setStatus("No search result to block")
+                } else {
+                    blockSelectionEntry(entry)
+                }
+            }
+
+            Tab.QUEUE -> {
+                val track = app.client.queueTracks.getOrNull(selectedQueueIndex)
+                if (track == null) {
+                    app.client.setStatus("No queued track to block")
+                } else {
+                    blockTrack(track)
+                }
+            }
+        }
+    }
+
+    private fun blockTrack(track: TrackInfo) {
+        blockTrackIdentity(
+            sourceId = track.sourceId,
+            trackId = track.id,
+            label = track.title.ifBlank { track.id },
+        )
+    }
+
+    private fun blockSelectionEntry(entry: SelectionEntry) {
+        val trackId = entry.directTrackId
+        if (trackId == null) {
+            app.client.setStatus("Only direct track results can be blocked before playback")
+            return
+        }
+        blockTrackIdentity(
+            sourceId = entry.sourceId,
+            trackId = trackId,
+            label = entry.title.ifBlank { trackId },
+        )
+    }
+
+    private fun blockTrackIdentity(sourceId: String?, trackId: String, label: String) {
+        val normalizedSourceId = sourceId?.takeIf { it.isNotBlank() }
+        if (normalizedSourceId == null) {
+            app.client.setStatus("Cannot block track without a source id")
+            return
+        }
+        if (trackId.isBlank()) {
+            app.client.setStatus("Cannot block track without a track id")
+            return
+        }
+
+        app.client.setStatus("Blocking $label...")
+        app.scope.launch {
+            runCatching {
+                app.client.requestService.updateContentFilter(
+                    target = ContentFilterMutationTarget.TRACK,
+                    sourceId = normalizedSourceId,
+                    valueId = trackId,
+                    note = label,
+                    ban = true,
+                )
+            }.onSuccess { result ->
+                app.client.refreshVisibleContentFilterState()
+                if (result.blockedNow && app.client.currentContext?.track?.matchesIdentity(normalizedSourceId, trackId) == true) {
+                    app.client.requestService.controlPlayback(PlaybackAction.SKIP)
+                }
+                requestQueue()
+                app.client.setStatus(result.failureMessage ?: result.successMessage ?: "Blocked $label")
+            }.onFailure { app.client.setStatus("Block failed: ${it.message}") }
+        }
+    }
+
+    private fun TrackInfo.matchesIdentity(sourceId: String, trackId: String): Boolean =
+        this.sourceId.equals(sourceId, ignoreCase = true) && id.equals(trackId, ignoreCase = true)
 
     private fun playSelectedNow() {
         when (currentTab) {
@@ -807,7 +903,13 @@ class StandaloneTui(
 
         val visibleRows = (rect.height / SEARCH_ROW_HEIGHT).coerceAtLeast(1)
         val start = scrollStart(selectedSearchIndex, visibleRows, results.size)
-        val actionWidth = if (rect.width >= 70) 16 else 8
+        val showPlayNow = rect.width >= 70
+        val showBlock = rect.width >= 88
+        val actionWidth = when {
+            showBlock -> 24
+            showPlayNow -> 16
+            else -> 8
+        }
         val textWidth = (rect.width - actionWidth - 1).coerceAtLeast(10)
 
         results.drop(start).take(visibleRows).forEachIndexed { index, entry ->
@@ -830,18 +932,21 @@ class StandaloneTui(
             ).joinToString(" | ").ifBlank { "-" }
             putText(graphics, row.x + 1, row.y + 1, textWidth - 1, meta, if (entry.unavailableReason == null) MUTED else ERROR, rowBg(selected, index))
 
-            val addRect = Rect(row.right - actionWidth + 1, row.y, minOf(7, actionWidth), 1)
-            putText(graphics, addRect.x, addRect.y, addRect.width, " Add ", TEXT, BUTTON_BG, SGR.BOLD)
-            addHit(addRect) {
+            var actionX = row.right - actionWidth + 1
+            actionX = drawRowButton(graphics, row, actionX, " Add ", BUTTON_BG) {
                 selectedSearchIndex = actualIndex
                 submitSearchResult(entry, TrackAddMode.NORMAL)
             }
-            if (rect.width >= 70) {
-                val nowRect = Rect(addRect.right + 1, row.y, 7, 1)
-                putText(graphics, nowRect.x, nowRect.y, nowRect.width, " Now ", TEXT, BUTTON_BG, SGR.BOLD)
-                addHit(nowRect) {
+            if (showPlayNow) {
+                actionX = drawRowButton(graphics, row, actionX, " Now ", BUTTON_BG) {
                     selectedSearchIndex = actualIndex
                     submitSearchResult(entry, TrackAddMode.PLAY_NOW)
+                }
+            }
+            if (showBlock && entry.directTrackId != null) {
+                drawRowButton(graphics, row, actionX, " Block ", DANGER_BG) {
+                    selectedSearchIndex = actualIndex
+                    blockSelectionEntry(entry)
                 }
             }
         }
@@ -857,7 +962,13 @@ class StandaloneTui(
 
         val visibleRows = (rect.height / QUEUE_ROW_HEIGHT).coerceAtLeast(1)
         val start = scrollStart(selectedQueueIndex, visibleRows, tracks.size)
-        val actionWidth = if (rect.width >= 70) 16 else 8
+        val showDelete = rect.width >= 70
+        val showBlock = rect.width >= 88
+        val actionWidth = when {
+            showBlock -> 24
+            showDelete -> 16
+            else -> 8
+        }
         val textWidth = (rect.width - actionWidth - 1).coerceAtLeast(10)
 
         tracks.drop(start).take(visibleRows).forEachIndexed { index, track ->
@@ -879,21 +990,41 @@ class StandaloneTui(
             ).joinToString(" | ").ifBlank { "-" }
             putText(graphics, row.x + 1, row.y + 1, textWidth - 1, meta, MUTED, rowBg(selected, index))
 
-            val playRect = Rect(row.right - actionWidth + 1, row.y, minOf(7, actionWidth), 1)
-            putText(graphics, playRect.x, playRect.y, playRect.width, " Play ", TEXT, BUTTON_BG, SGR.BOLD)
-            addHit(playRect) {
+            var actionX = row.right - actionWidth + 1
+            actionX = drawRowButton(graphics, row, actionX, " Play ", BUTTON_BG) {
                 selectedQueueIndex = actualIndex
                 playSelectedQueueTrack()
             }
-            if (rect.width >= 70) {
-                val delRect = Rect(playRect.right + 1, row.y, 7, 1)
-                putText(graphics, delRect.x, delRect.y, delRect.width, " Del ", TEXT, DANGER_BG, SGR.BOLD)
-                addHit(delRect) {
+            if (showDelete) {
+                actionX = drawRowButton(graphics, row, actionX, " Del ", DANGER_BG) {
                     selectedQueueIndex = actualIndex
                     removeQueueTrack(track)
                 }
             }
+            if (showBlock) {
+                drawRowButton(graphics, row, actionX, " Block ", DANGER_BG) {
+                    selectedQueueIndex = actualIndex
+                    blockTrack(track)
+                }
+            }
         }
+    }
+
+    private fun drawRowButton(
+        graphics: TextGraphics,
+        row: Rect,
+        x: Int,
+        label: String,
+        background: TextColor,
+        action: () -> Unit,
+    ): Int {
+        val width = label.length.coerceAtMost((row.right - x + 1).coerceAtLeast(0))
+        val rect = Rect(x, row.y, width, 1)
+        if (rect.width > 0) {
+            putText(graphics, rect.x, rect.y, rect.width, label, TEXT, background, SGR.BOLD)
+            addHit(rect, action)
+        }
+        return x + label.length + 1
     }
 
     private fun drawPinnedCurrentTrack(graphics: TextGraphics, rect: Rect, track: TrackInfo) {
@@ -935,15 +1066,17 @@ class StandaloneTui(
         val playLabel = if (ctx?.state is PlaybackState.Playing) " Pause " else " Resume "
         var x = rect.x
         val buttons = listOf(
-            playLabel to { togglePause() },
-            " Skip " to { playbackControl(PlaybackAction.SKIP) },
-            " Stop " to { playbackControl(PlaybackAction.STOP) },
+            ButtonSpec(playLabel, BUTTON_BG) { togglePause() },
+            ButtonSpec(" Skip ", BUTTON_BG) { playbackControl(PlaybackAction.SKIP) },
+            ButtonSpec(" Stop ", BUTTON_BG) { playbackControl(PlaybackAction.STOP) },
+            ButtonSpec(" Block ", DANGER_BG) { blockActiveTrack() },
         )
-        buttons.forEach { (label, action) ->
+        buttons.forEach { buttonSpec ->
+            val label = buttonSpec.label
             val button = Rect(x, rect.y, label.length.coerceAtMost((rect.right - x + 1).coerceAtLeast(0)), 1)
             if (button.width > 0) {
-                putText(graphics, button.x, button.y, button.width, label, TEXT, BUTTON_BG, SGR.BOLD)
-                addHit(button, action)
+                putText(graphics, button.x, button.y, button.width, label, TEXT, buttonSpec.background, SGR.BOLD)
+                addHit(button, buttonSpec.action)
             }
             x += label.length + 1
         }
@@ -1122,6 +1255,7 @@ class StandaloneTui(
             "u URL",
             "enter add/play",
             "p play now",
+            "b block",
             "space pause",
             "n skip",
             "s stop",

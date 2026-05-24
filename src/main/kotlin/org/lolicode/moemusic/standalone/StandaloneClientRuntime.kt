@@ -30,6 +30,7 @@ import org.lolicode.moemusic.api.model.TrackAddMode
 import org.lolicode.moemusic.api.model.TrackContext
 import org.lolicode.moemusic.api.model.TrackInfo
 import org.lolicode.moemusic.api.model.directTrackId
+import org.lolicode.moemusic.api.service.FilterVerdict
 import org.lolicode.moemusic.clientcore.audio.ClientAudioPlayerRuntime
 import org.lolicode.moemusic.clientcore.audio.LavaPlayerTrackLoader
 import org.lolicode.moemusic.clientcore.audio.PcmRingBuffer
@@ -40,6 +41,7 @@ import org.lolicode.moemusic.clientcore.playback.SearchSourceCatalog
 import org.lolicode.moemusic.clientcore.playback.SearchSourceInfo
 import org.lolicode.moemusic.clientcore.request.ClientRequestTransport
 import org.lolicode.moemusic.clientcore.request.DirectClientRequestService
+import org.lolicode.moemusic.core.config.ContentFilterClientListMode
 import org.lolicode.moemusic.core.config.ClientVolume
 import org.lolicode.moemusic.core.config.ModConfigManager
 import org.lolicode.moemusic.core.contentfilter.ContentFilterRuntime
@@ -355,14 +357,14 @@ class StandaloneClientRuntime(
     private fun handleSearchResponse(msg: SearchResponse) {
         pendingSearchResponses.complete(msg.request_id, msg)
         searchQuery = msg.query
-        searchResults = msg.entries.map { it.toApi() }
+        searchResults = visibleSearchResults(msg.entries.map { it.toApi() })
         searchFailure = msg.failure.ifEmpty { null }
         setStatus(searchFailure ?: "Search returned ${searchResults.size} result(s)")
     }
 
     private fun handleQueueResponse(msg: QueueResponse) {
         pendingQueueResponses.complete(msg.request_id, msg)
-        queueTracks = msg.tracks.map { it.toApi() }
+        queueTracks = visibleQueueTracks(msg.tracks.map { it.toApi() })
         queueFailure = msg.failure.ifEmpty { null }
     }
 
@@ -375,7 +377,7 @@ class StandaloneClientRuntime(
     private fun handleIdentifierSubmitResponse(msg: IdentifierSubmitResponse) {
         pendingIdentifierSubmitResponses.complete(msg.request_id, msg)
         if (msg.choices.isNotEmpty()) {
-            searchResults = msg.choices.map { it.toApi() }
+            searchResults = visibleSearchResults(msg.choices.map { it.toApi() })
             searchFailure = null
             setStatus("Identifier returned ${searchResults.size} choice(s)")
         } else {
@@ -387,7 +389,7 @@ class StandaloneClientRuntime(
     private fun handleSelectionSubmitResponse(msg: SelectionSubmitResponse) {
         pendingSelectionSubmitResponses.complete(msg.request_id, msg)
         if (msg.choices.isNotEmpty()) {
-            searchResults = msg.choices.map { it.toApi() }
+            searchResults = visibleSearchResults(msg.choices.map { it.toApi() })
             searchFailure = null
             setStatus("Selection returned ${searchResults.size} choice(s)")
         } else {
@@ -409,7 +411,25 @@ class StandaloneClientRuntime(
 
     private fun handleContentFilterActionResponse(msg: ContentFilterActionResponse) {
         pendingContentFilterActionResponses.complete(msg.request_id, msg)
+        refreshVisibleContentFilterState()
         setStatus(msg.success.ifEmpty { msg.failure.ifEmpty { "Content filter updated" } })
+    }
+
+    fun refreshVisibleContentFilterState() {
+        searchResults = visibleSearchResults(searchResults)
+        queueTracks = visibleQueueTracks(queueTracks)
+    }
+
+    private fun visibleSearchResults(entries: List<SelectionEntry>): List<SelectionEntry> {
+        if (!ContentFilterRuntime.clientFilterEnabled()) return entries
+        if (ContentFilterRuntime.searchListMode() != ContentFilterClientListMode.HIDE) return entries
+        return entries.filter { ContentFilterRuntime.selectionFilterVerdict(it) is FilterVerdict.Allow }
+    }
+
+    private fun visibleQueueTracks(tracks: List<TrackInfo>): List<TrackInfo> {
+        if (!ContentFilterRuntime.clientFilterEnabled()) return tracks
+        if (ContentFilterRuntime.queueListMode() != ContentFilterClientListMode.HIDE) return tracks
+        return tracks.filter { ContentFilterRuntime.trackFilterVerdict(it) is FilterVerdict.Allow }
     }
 
     private fun handleSyncResponse(response: SyncResponse) {
