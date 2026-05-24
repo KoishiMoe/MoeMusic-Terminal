@@ -1,5 +1,6 @@
 package org.lolicode.moemusic.standalone
 
+import com.googlecode.lanterna.TerminalTextUtils
 import com.googlecode.lanterna.TextCharacter
 import com.googlecode.lanterna.TextColor
 import com.googlecode.lanterna.graphics.TextGraphics
@@ -244,8 +245,8 @@ internal class StandaloneCoverArtRenderer(
                 graphics.setCharacter(x + col, y + row, blank)
             }
         }
-        val text = label.take(width)
-        val textX = x + ((width - text.length) / 2).coerceAtLeast(0)
+        val text = TerminalTextUtils.fitString(label, width)
+        val textX = x + ((width - TerminalTextUtils.getColumnWidth(text)) / 2).coerceAtLeast(0)
         val textY = y + height / 2
         graphics.foregroundColor = PLACEHOLDER_FG
         graphics.backgroundColor = PLACEHOLDER_BG

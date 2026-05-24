@@ -1,6 +1,7 @@
 package org.lolicode.moemusic.standalone
 
 import com.googlecode.lanterna.SGR
+import com.googlecode.lanterna.TerminalTextUtils
 import com.googlecode.lanterna.TextCharacter
 import com.googlecode.lanterna.TextColor
 import com.googlecode.lanterna.graphics.TextGraphics
@@ -440,7 +441,7 @@ class StandaloneTui(
 
     private fun render(screen: TerminalScreen) {
         val size = screen.terminalSize
-        val width = size.columns
+        val width = drawableColumns(size.columns)
         val height = size.rows
         if (width <= 0 || height <= 0) return
 
@@ -606,7 +607,7 @@ class StandaloneTui(
         if (body.height <= 0 || body.width <= 0) return
 
         val sourceLabel = "Source: ${currentSearchSourceName().ifBlank { "none" }}"
-        val sourceRect = Rect(body.x, body.y, minOf(body.width, maxOf(18, sourceLabel.length + 2)), 1)
+        val sourceRect = Rect(body.x, body.y, minOf(body.width, maxOf(18, columnWidth(sourceLabel) + 2)), 1)
         putText(graphics, sourceRect.x, sourceRect.y, sourceRect.width, sourceLabel, SOURCE, BUTTON_BG, SGR.BOLD)
         addHit(sourceRect) { cycleSearchSource() }
 
@@ -867,8 +868,9 @@ class StandaloneTui(
             fillRect(graphics, Rect(rect.x, rect.y, filled, rect.height), foreground)
         }
         val labelText = " $label "
-        val labelX = rect.x + ((rect.width - labelText.length) / 2).coerceAtLeast(0)
-        putText(graphics, labelX, rect.y, minOf(labelText.length, rect.right - labelX + 1), labelText, TEXT, TextColor.ANSI.DEFAULT)
+        val labelWidth = columnWidth(labelText)
+        val labelX = rect.x + ((rect.width - labelWidth) / 2).coerceAtLeast(0)
+        putText(graphics, labelX, rect.y, minOf(labelWidth, rect.right - labelX + 1), labelText, TEXT, TextColor.ANSI.DEFAULT)
     }
 
     private fun fillRect(graphics: TextGraphics, rect: Rect, background: TextColor) {
@@ -894,13 +896,26 @@ class StandaloneTui(
         if (width <= 0 || y < 0) return
         graphics.foregroundColor = color
         graphics.backgroundColor = background
-        val safe = text.take(width).padEnd(width)
+        val safe = fitAndPadColumns(text, width)
         if (modifier == null) {
             graphics.putString(x, y, safe)
         } else {
             graphics.putString(x, y, safe, modifier)
         }
     }
+
+    private fun fitAndPadColumns(text: String, width: Int): String {
+        if (width <= 0) return ""
+        val fitted = TerminalTextUtils.fitString(text.sanitizeForTerminal(), width)
+        val padding = (width - columnWidth(fitted)).coerceAtLeast(0)
+        return fitted + " ".repeat(padding)
+    }
+
+    private fun columnWidth(text: String): Int =
+        TerminalTextUtils.getColumnWidth(text.sanitizeForTerminal())
+
+    private fun String.sanitizeForTerminal(): String =
+        replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
 
     private fun clearVirtualFrame(graphics: TextGraphics, width: Int, height: Int) {
         fillRect(graphics, Rect(0, 0, width, height), TextColor.ANSI.DEFAULT)
@@ -964,24 +979,64 @@ class StandaloneTui(
             PlaybackState.Stopped, null -> "stopped"
         }
 
-    private fun helpLines(width: Int): List<String> =
+    private fun helpLines(width: Int): List<String> {
+        val commands = listOf(
+            "1/2/3 tabs",
+            "/ search",
+            "u URL",
+            "enter add/play",
+            "p play now",
+            "space pause",
+            "n skip",
+            "s stop",
+            "+/- volume",
+            "o source",
+            "r refresh",
+            "x remove",
+            "j/k move",
+            "c reload",
+            "q quit",
+        )
+        return fitHelpCommands(commands, width, maxHelpLines(width))
+    }
+
+    private fun maxHelpLines(width: Int): Int =
         when {
-            width < 58 -> listOf(
-                "1/2/3 tabs  / search  u url  enter add/play",
-                "q quit  space pause  n skip  s stop  +/- vol",
-                "j/k move  p now  r refresh  x remove  o src",
-            )
-
-            width < 100 -> listOf(
-                "1/2/3 tabs | / search | u URL | enter add/play | p play now | r refresh | x remove",
-                "space pause | n skip | s stop | +/- volume | o source | c reload | q quit",
-            )
-
-            else -> listOf(
-                "1/2/3 tabs | / search | u submit URL | enter add/play | p play now | r refresh | x remove",
-                "space pause | n skip | s stop | +/- volume | o source | c reload | mouse supported terminals",
-            )
+            width >= 96 -> 2
+            width >= 52 -> 3
+            else -> 4
         }
+
+    private fun fitHelpCommands(commands: List<String>, width: Int, maxLines: Int): List<String> {
+        if (width <= 0 || maxLines <= 0) return emptyList()
+        val mandatory = setOf("1/2/3 tabs", "/ search", "enter add/play", "space pause", "q quit")
+        val fittedCommands = commands.toMutableList()
+        var lines = packHelpCommands(fittedCommands, width)
+        while (lines.size > maxLines && fittedCommands.any { it !in mandatory }) {
+            val index = fittedCommands.indexOfLast { it !in mandatory }
+            fittedCommands.removeAt(index)
+            lines = packHelpCommands(fittedCommands, width)
+        }
+        return lines.take(maxLines)
+    }
+
+    private fun packHelpCommands(commands: List<String>, width: Int): List<String> {
+        val lines = mutableListOf<String>()
+        var line = ""
+        commands.forEach { command ->
+            val candidate = if (line.isEmpty()) command else "$line | $command"
+            if (line.isNotEmpty() && TerminalTextUtils.getColumnWidth(candidate) > width) {
+                lines += TerminalTextUtils.fitString(line, width)
+                line = command
+            } else {
+                line = candidate
+            }
+        }
+        if (line.isNotEmpty()) {
+            lines += TerminalTextUtils.fitString(line, width)
+        }
+        return lines
+    }
 
     private fun scrollStart(index: Int, visibleRows: Int, total: Int): Int {
         if (visibleRows <= 0 || total <= visibleRows) return 0
@@ -1000,6 +1055,9 @@ class StandaloneTui(
 
     private fun Int.coerceSelection(size: Int): Int =
         if (size <= 0) 0 else coerceIn(0, size - 1)
+
+    private fun drawableColumns(terminalColumns: Int): Int =
+        (terminalColumns - LAST_COLUMN_WRAP_GUARD).coerceAtLeast(0)
 
     companion object {
         fun createTerminal(terminalMode: TerminalMode, mouseMode: MouseMode = MouseMode.AUTO): Terminal {
@@ -1060,6 +1118,7 @@ class StandaloneTui(
         private const val WIDE_LAYOUT_MIN_WIDTH = 112
         private const val SEARCH_ROW_HEIGHT = 2
         private const val QUEUE_ROW_HEIGHT = 2
+        private const val LAST_COLUMN_WRAP_GUARD = 1
 
         private val TEXT = TextColor.RGB(234, 237, 243)
         private val MUTED = TextColor.RGB(158, 166, 178)

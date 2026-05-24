@@ -2,12 +2,15 @@ package org.lolicode.moemusic.standalone
 
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.io.FileOutputStream
+import java.io.PrintStream
 import kotlin.system.exitProcess
 import kotlin.io.path.createDirectories
 
 fun main(args: Array<String>) {
     val options = StandaloneOptions.parse(args) ?: return
     options.configDir.createDirectories()
+    configureStandaloneLogging(options.configDir)
 
     val terminal = try {
         StandaloneTui.createTerminal(options.terminalMode, options.mouseMode)
@@ -17,22 +20,54 @@ fun main(args: Array<String>) {
     }
 
     try {
-        StandaloneApplication(options.configDir).use { app ->
-            app.start()
-            StandaloneTui(
-                app = app,
-                terminal = terminal,
-                options = StandaloneTui.Options(
-                    mouseMode = options.mouseMode,
-                    coverMode = options.coverMode,
-                ),
-            ).run()
+        TerminalLogRedirect(options.configDir).use {
+            StandaloneApplication(options.configDir).use { app ->
+                app.start()
+                StandaloneTui(
+                    app = app,
+                    terminal = terminal,
+                    options = StandaloneTui.Options(
+                        mouseMode = options.mouseMode,
+                        coverMode = options.coverMode,
+                    ),
+                ).run()
+            }
         }
     } catch (e: StandaloneTerminalException) {
         System.err.println(e.message)
         exitProcess(2)
     }
 }
+
+private fun configureStandaloneLogging(configDir: Path) {
+    val logFile = configDir.resolve(STANDALONE_LOG_FILE).toAbsolutePath().normalize()
+    System.setProperty(
+        "org.slf4j.simpleLogger.logFile",
+        System.getProperty("org.slf4j.simpleLogger.logFile") ?: logFile.toString(),
+    )
+}
+
+private class TerminalLogRedirect(
+    configDir: Path,
+) : AutoCloseable {
+    private val originalErr = System.err
+    private val redirectedErr = PrintStream(
+        FileOutputStream(configDir.resolve(STANDALONE_LOG_FILE).toFile(), true),
+        true,
+        Charsets.UTF_8,
+    )
+
+    init {
+        System.setErr(redirectedErr)
+    }
+
+    override fun close() {
+        System.setErr(originalErr)
+        redirectedErr.close()
+    }
+}
+
+private const val STANDALONE_LOG_FILE = "standalone.log"
 
 data class StandaloneOptions(
     val configDir: Path = defaultConfigDir(),

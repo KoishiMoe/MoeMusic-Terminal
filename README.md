@@ -48,5 +48,8 @@ Mouse support defaults to `auto` and depends on the terminal emitting mouse even
 defaults to Unicode half-block rendering and falls back to an inline placeholder when a cover is
 missing, blocked by client media policy, or fails to decode.
 
+Runtime logs are written to `<config-dir>/standalone.log` while the TUI is active so background
+warnings do not corrupt the terminal screen.
+
 Plugins can be placed under `<config-dir>/plugins/`, matching the shared core plugin discovery
 layout.
