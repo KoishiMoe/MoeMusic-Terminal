@@ -51,5 +51,9 @@ missing, blocked by client media policy, or fails to decode.
 Runtime logs are written to `<config-dir>/standalone.log` while the TUI is active so background
 warnings do not corrupt the terminal screen.
 
+The generated launcher also enables native access for unnamed modules. This avoids the Java 24+
+restricted native-access warning emitted by LavaPlayer before application logging can redirect
+output away from the terminal UI.
+
 Plugins can be placed under `<config-dir>/plugins/`, matching the shared core plugin discovery
 layout.
