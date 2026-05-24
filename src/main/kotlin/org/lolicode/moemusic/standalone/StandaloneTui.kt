@@ -1118,7 +1118,7 @@ class StandaloneTui(
         private const val WIDE_LAYOUT_MIN_WIDTH = 112
         private const val SEARCH_ROW_HEIGHT = 2
         private const val QUEUE_ROW_HEIGHT = 2
-        private const val LAST_COLUMN_WRAP_GUARD = 1
+        private const val LAST_COLUMN_WRAP_GUARD = 0 // 1
 
         private val TEXT = TextColor.RGB(234, 237, 243)
         private val MUTED = TextColor.RGB(158, 166, 178)
