@@ -20,7 +20,7 @@ java {
 }
 
 application {
-    mainClass.set("org.lolicode.moemusic.standalone.StandaloneMainKt")
+    mainClass.set("org.lolicode.moemusic.terminal.TerminalMainKt")
     applicationDefaultJvmArgs = listOf(
         // LavaPlayer loads native helpers during playback bootstrap. Java 24+ warns on stderr
         // unless native access is explicitly granted before application logging is active.

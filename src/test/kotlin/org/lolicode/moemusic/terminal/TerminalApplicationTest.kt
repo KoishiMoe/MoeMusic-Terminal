@@ -1,4 +1,4 @@
-package org.lolicode.moemusic.standalone
+package org.lolicode.moemusic.terminal
 
 import kotlinx.coroutines.runBlocking
 import org.lolicode.moemusic.core.protocol.PacketIds
@@ -11,13 +11,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-class StandaloneApplicationTest {
+class TerminalApplicationTest {
 
     @Test
     fun `startup completes local handshake and exposes builtin http source`() {
-        val configDir = createTempDirectory("moemusic-standalone-test-")
+        val configDir = createTempDirectory("moemusic-terminal-test-")
 
-        StandaloneApplication(configDir).use { app ->
+        TerminalApplication(configDir).use { app ->
             app.start()
 
             assertTrue(app.client.serverHandshakeReceived)
@@ -28,9 +28,9 @@ class StandaloneApplicationTest {
 
     @Test
     fun `direct queue request works through in-memory protocol`() = runBlocking {
-        val configDir = createTempDirectory("moemusic-standalone-test-")
+        val configDir = createTempDirectory("moemusic-terminal-test-")
 
-        StandaloneApplication(configDir).use { app ->
+        TerminalApplication(configDir).use { app ->
             app.start()
 
             val queue = app.client.requestService.requestQueue()
@@ -42,8 +42,8 @@ class StandaloneApplicationTest {
 
     @Test
     fun `search responses append later pages`() = runBlocking {
-        val configDir = createTempDirectory("moemusic-standalone-test-")
-        val runtime = StandaloneClientRuntime(configDir, StandaloneUser(), this)
+        val configDir = createTempDirectory("moemusic-terminal-test-")
+        val runtime = TerminalClientRuntime(configDir, TerminalUser(), this)
 
         runtime.receiveFromServer(
             PacketIds.SEARCH_RESPONSE,

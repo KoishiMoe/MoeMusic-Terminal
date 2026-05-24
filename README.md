@@ -1,4 +1,4 @@
-# MoeMusic Standalone Prototype
+# MoeMusic Terminal Prototype
 
 This is a lightweight single-user bootstrap for the shared MoeMusic runtime.
 
@@ -21,7 +21,7 @@ the JVM without a controlling `/dev/tty`, which Lanterna needs on Unix-like syst
 
 ```bash
 ../shared/gradlew -p . installDist
-./build/install/moemusic-standalone/bin/moemusic-standalone
+./build/install/moemusic-terminal/bin/moemusic-terminal
 ```
 
 Useful arguments:
@@ -33,16 +33,16 @@ Useful arguments:
 Terminal mode can be selected explicitly:
 
 ```bash
-./build/install/moemusic-standalone/bin/moemusic-standalone --terminal text
-./build/install/moemusic-standalone/bin/moemusic-standalone --terminal swing
+./build/install/moemusic-terminal/bin/moemusic-terminal --terminal text
+./build/install/moemusic-terminal/bin/moemusic-terminal --terminal swing
 ```
 
 Optional TUI features:
 
 ```bash
-./build/install/moemusic-standalone/bin/moemusic-standalone --mouse off
-./build/install/moemusic-standalone/bin/moemusic-standalone --cover off
-./build/install/moemusic-standalone/bin/moemusic-standalone --cover kitty
+./build/install/moemusic-terminal/bin/moemusic-terminal --mouse off
+./build/install/moemusic-terminal/bin/moemusic-terminal --cover off
+./build/install/moemusic-terminal/bin/moemusic-terminal --cover kitty
 ```
 
 Mouse support defaults to `auto` and depends on the terminal emitting mouse events. Cover display
@@ -52,7 +52,7 @@ terminal-image detection, `--cover unicode` for text rendering, or `--cover off`
 Covers still fall back to an inline placeholder when a cover is missing, blocked by client media
 policy, or fails to decode.
 
-Runtime logs are written to `<config-dir>/standalone.log` while the TUI is active so background
+Runtime logs are written to `<config-dir>/terminal.log` while the TUI is active so background
 warnings do not corrupt the terminal screen.
 
 The generated launcher also enables native access for unnamed modules. This avoids the Java 24+

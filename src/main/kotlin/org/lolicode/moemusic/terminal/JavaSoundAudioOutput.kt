@@ -1,4 +1,4 @@
-package org.lolicode.moemusic.standalone
+package org.lolicode.moemusic.terminal
 
 import org.lolicode.moemusic.clientcore.audio.PcmRingBuffer
 import org.lolicode.moemusic.clientcore.audio.StreamingAudioOutput

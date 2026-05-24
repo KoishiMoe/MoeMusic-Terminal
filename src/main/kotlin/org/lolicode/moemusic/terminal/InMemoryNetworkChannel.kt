@@ -1,17 +1,17 @@
-package org.lolicode.moemusic.standalone
+package org.lolicode.moemusic.terminal
 
 import org.lolicode.moemusic.api.MoeMusicUser
 import org.lolicode.moemusic.core.protocol.PacketId
 import org.lolicode.moemusic.core.protocol.PacketRegistry
 import org.lolicode.moemusic.core.transport.NetworkChannel
 
-interface StandaloneClientPacketSink {
+interface TerminalClientPacketSink {
     fun receiveFromServer(packetId: PacketId, payload: ByteArray)
 }
 
 class InMemoryNetworkChannel(
     private val serverRegistry: PacketRegistry,
-    private val clientSink: StandaloneClientPacketSink,
+    private val clientSink: TerminalClientPacketSink,
     private val localUser: MoeMusicUser,
 ) : NetworkChannel {
 

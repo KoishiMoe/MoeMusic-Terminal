@@ -1,4 +1,4 @@
-package org.lolicode.moemusic.standalone
+package org.lolicode.moemusic.terminal
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,7 +10,6 @@ import org.lolicode.moemusic.api.model.TrackInfo
 import org.lolicode.moemusic.core.audio.LavaPlayerNativeBootstrap
 import org.lolicode.moemusic.core.config.ModConfigManager
 import org.lolicode.moemusic.core.contentfilter.ContentFilterRuntime
-import org.lolicode.moemusic.core.i18n.Localization
 import org.lolicode.moemusic.core.media.probe.MediaProbeServiceImpl
 import org.lolicode.moemusic.core.network.ServerPacketHandlers
 import org.lolicode.moemusic.core.network.ServerPacketSessionBridge
@@ -26,16 +25,16 @@ import org.lolicode.moemusic.core.user.UserActionServiceImpl
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
 
-class StandaloneApplication(
+class TerminalApplication(
     val configDir: Path,
 ) : AutoCloseable {
 
-    private val logger = LoggerFactory.getLogger(StandaloneApplication::class.java)
+    private val logger = LoggerFactory.getLogger(TerminalApplication::class.java)
 
     val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    val user: StandaloneUser = StandaloneUser()
+    val user: TerminalUser = TerminalUser()
 
-    lateinit var client: StandaloneClientRuntime
+    lateinit var client: TerminalClientRuntime
         private set
 
     private lateinit var channel: InMemoryNetworkChannel
@@ -49,15 +48,15 @@ class StandaloneApplication(
         ContentFilterRuntime.applyConfig(ModConfigManager.config)
 
         val packetRegistry = PacketRegistry()
-        client = StandaloneClientRuntime(configDir, user, scope)
+        client = TerminalClientRuntime(configDir, user, scope)
         channel = InMemoryNetworkChannel(packetRegistry, client, user)
         client.attachChannel(channel)
 
-        ServerPacketHandlers(channel, StandaloneSessionBridge(user)).registerAll(packetRegistry)
+        ServerPacketHandlers(channel, TerminalSessionBridge(user)).registerAll(packetRegistry)
         ServerRuntimeCoordinator.serverInit(
             channel = channel,
             configDir = configDir,
-            adapter = StandaloneServerAdapter(client),
+            adapter = TerminalServerAdapter(client),
             pluginServicesFactory = ::buildPluginServices,
         )
 
@@ -65,7 +64,7 @@ class StandaloneApplication(
         PluginManager.dispatchClientRuntimeLoad()
         client.start()
         started = true
-        logger.info("MoeMusic standalone runtime started at {}", configDir)
+        logger.info("MoeMusic terminal runtime started at {}", configDir)
     }
 
     fun reloadConfig() {
@@ -85,7 +84,7 @@ class StandaloneApplication(
         runCatching { ServerRuntimeCoordinator.serverShutdown(finalRuntime = true) }
         scope.cancel()
         started = false
-        logger.info("MoeMusic standalone runtime stopped.")
+        logger.info("MoeMusic terminal runtime stopped.")
     }
 
     private fun buildPluginServices(
@@ -108,8 +107,8 @@ class StandaloneApplication(
         )
     }
 
-    private class StandaloneServerAdapter(
-        private val client: StandaloneClientRuntime,
+    private class TerminalServerAdapter(
+        private val client: TerminalClientRuntime,
     ) : ServerRuntimeAdapter {
         override fun onUserQueueTrackSkipped(track: TrackInfo, reason: LocalizedText?) {
             client.setStatus("Skipped '${track.displayTitle()}'")
@@ -120,8 +119,8 @@ class StandaloneApplication(
         }
     }
 
-    private class StandaloneSessionBridge(
-        private val user: StandaloneUser,
+    private class TerminalSessionBridge(
+        private val user: TerminalUser,
     ) : ServerPacketSessionBridge {
         override fun activate(sender: org.lolicode.moemusic.api.MoeMusicUser, locale: String): org.lolicode.moemusic.api.MoeMusicUser {
             user.updateLocale(locale)

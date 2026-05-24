@@ -1,4 +1,4 @@
-package org.lolicode.moemusic.standalone
+package org.lolicode.moemusic.terminal
 
 import com.googlecode.lanterna.SGR
 import com.googlecode.lanterna.TerminalTextUtils
@@ -27,8 +27,8 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 
-class StandaloneTui(
-    private val app: StandaloneApplication,
+class TerminalTui(
+    private val app: TerminalApplication,
     private val terminal: Terminal,
     private val options: Options = Options(),
 ) {
@@ -94,7 +94,7 @@ class StandaloneTui(
     )
 
     private val running = AtomicBoolean(true)
-    private val coverRenderer = StandaloneCoverArtRenderer(app.scope)
+    private val coverRenderer = TerminalCoverArtRenderer(app.scope)
     private var currentTab = Tab.NOW_PLAYING
     private var selectedSearchIndex = 0
     private var selectedQueueIndex = 0
@@ -681,7 +681,7 @@ class StandaloneTui(
         fillRect(graphics, Rect(0, 0, width, 1), HEADER_BG)
         val status = app.client.statusMessage
         val header = if (width >= 100) {
-            " MoeMusic Standalone | $status"
+            " MoeMusic Terminal | $status"
         } else {
             " MoeMusic | $status"
         }
@@ -1610,22 +1610,22 @@ class StandaloneTui(
         private fun newTerminalFactory(mouseMode: MouseMode): DefaultTerminalFactory =
             DefaultTerminalFactory()
                 .setInputTimeout(50)
-                .setTerminalEmulatorTitle("MoeMusic Standalone")
+                .setTerminalEmulatorTitle("MoeMusic Terminal")
                 .apply {
                     if (mouseMode != MouseMode.OFF) {
                         setMouseCaptureMode(MouseCaptureMode.CLICK_RELEASE_DRAG)
                     }
                 }
 
-        private fun terminalUnavailable(cause: Throwable): StandaloneTerminalException =
-            StandaloneTerminalException(
+        private fun terminalUnavailable(cause: Throwable): TerminalUnavailableException =
+            TerminalUnavailableException(
                 buildString {
-                    appendLine("MoeMusic standalone could not open a text terminal.")
+                    appendLine("MoeMusic terminal could not open a text terminal.")
                     appendLine("Lanterna needs a controlling TTY for its Unix backend, but this process has none.")
                     appendLine()
                     appendLine("Recommended:")
                     appendLine("  ../shared/gradlew -p . installDist")
-                    appendLine("  ./build/install/moemusic-standalone/bin/moemusic-standalone")
+                    appendLine("  ./build/install/moemusic-terminal/bin/moemusic-terminal")
                     appendLine()
                     appendLine("Alternatives:")
                     appendLine("  Use --terminal swing on desktop systems.")

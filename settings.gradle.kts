@@ -22,7 +22,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "moemusic-standalone"
+rootProject.name = "moemusic-terminal"
 
 val sharedBuildDir = file("../shared")
 if (sharedBuildDir.resolve("settings.gradle.kts").isFile) {

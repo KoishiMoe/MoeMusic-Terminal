@@ -1,6 +1,6 @@
-package org.lolicode.moemusic.standalone
+package org.lolicode.moemusic.terminal
 
-class StandaloneTerminalException(
+class TerminalUnavailableException(
     message: String,
     cause: Throwable? = null,
 ) : RuntimeException(message, cause)

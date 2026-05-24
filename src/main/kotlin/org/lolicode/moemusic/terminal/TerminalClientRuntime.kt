@@ -1,35 +1,10 @@
-package org.lolicode.moemusic.standalone
+package org.lolicode.moemusic.terminal
 
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import org.lolicode.moemusic.api.LocalizedText
-import org.lolicode.moemusic.api.client.ClientAvailabilityIssue
-import org.lolicode.moemusic.api.client.ClientSearchCatalog
-import org.lolicode.moemusic.api.client.ClientSearchSource
-import org.lolicode.moemusic.api.client.ClientVolumeOverride
-import org.lolicode.moemusic.api.client.IClientPlaybackService
-import org.lolicode.moemusic.api.client.IClientRequestService
-import org.lolicode.moemusic.api.event.OnClientConnected
-import org.lolicode.moemusic.api.event.OnClientDisconnected
-import org.lolicode.moemusic.api.event.OnClientPlaybackPaused
-import org.lolicode.moemusic.api.event.OnClientPlaybackResumed
-import org.lolicode.moemusic.api.event.OnClientPlaybackSeeked
-import org.lolicode.moemusic.api.event.OnClientPlaybackStarted
-import org.lolicode.moemusic.api.event.OnClientPlaybackStopped
-import org.lolicode.moemusic.api.event.UserParticipationState
-import org.lolicode.moemusic.api.model.PlaybackResource
-import org.lolicode.moemusic.api.model.PlaybackState
-import org.lolicode.moemusic.api.model.SearchQuery
-import org.lolicode.moemusic.api.model.SelectionEntry
-import org.lolicode.moemusic.api.model.TrackAddMode
-import org.lolicode.moemusic.api.model.TrackContext
-import org.lolicode.moemusic.api.model.TrackInfo
-import org.lolicode.moemusic.api.model.directTrackId
+import org.lolicode.moemusic.api.client.*
+import org.lolicode.moemusic.api.event.*
+import org.lolicode.moemusic.api.model.*
 import org.lolicode.moemusic.api.service.FilterVerdict
 import org.lolicode.moemusic.clientcore.audio.ClientAudioPlayerRuntime
 import org.lolicode.moemusic.clientcore.audio.LavaPlayerTrackLoader
@@ -41,8 +16,8 @@ import org.lolicode.moemusic.clientcore.playback.SearchSourceCatalog
 import org.lolicode.moemusic.clientcore.playback.SearchSourceInfo
 import org.lolicode.moemusic.clientcore.request.ClientRequestTransport
 import org.lolicode.moemusic.clientcore.request.DirectClientRequestService
-import org.lolicode.moemusic.core.config.ContentFilterClientListMode
 import org.lolicode.moemusic.core.config.ClientVolume
+import org.lolicode.moemusic.core.config.ContentFilterClientListMode
 import org.lolicode.moemusic.core.config.ModConfigManager
 import org.lolicode.moemusic.core.contentfilter.ContentFilterRuntime
 import org.lolicode.moemusic.core.event.CoreEvents
@@ -53,46 +28,18 @@ import org.lolicode.moemusic.core.playback.parseLyrics
 import org.lolicode.moemusic.core.playback.toApi
 import org.lolicode.moemusic.core.protocol.PacketId
 import org.lolicode.moemusic.core.protocol.PacketIds
-import org.lolicode.moemusic.core.protocol.proto.ClientHandshake
-import org.lolicode.moemusic.core.protocol.proto.ClientStateChange
-import org.lolicode.moemusic.core.protocol.proto.ClientStateProto
-import org.lolicode.moemusic.core.protocol.proto.ContentFilterActionProto
-import org.lolicode.moemusic.core.protocol.proto.ContentFilterActionRequest
-import org.lolicode.moemusic.core.protocol.proto.ContentFilterActionResponse
-import org.lolicode.moemusic.core.protocol.proto.ContentFilterTargetProto
-import org.lolicode.moemusic.core.protocol.proto.IdentifierSubmitRequest
-import org.lolicode.moemusic.core.protocol.proto.IdentifierSubmitResponse
-import org.lolicode.moemusic.core.protocol.proto.PlayTrack
-import org.lolicode.moemusic.core.protocol.proto.PlaybackControlAction
-import org.lolicode.moemusic.core.protocol.proto.PlaybackControlRequest
-import org.lolicode.moemusic.core.protocol.proto.PlaybackControlResponse
-import org.lolicode.moemusic.core.protocol.proto.PlaybackStateProto
-import org.lolicode.moemusic.core.protocol.proto.QueueRemoveRequest
-import org.lolicode.moemusic.core.protocol.proto.QueueRemoveResponse
-import org.lolicode.moemusic.core.protocol.proto.QueueRequest
-import org.lolicode.moemusic.core.protocol.proto.QueueResponse
-import org.lolicode.moemusic.core.protocol.proto.SearchRequest
-import org.lolicode.moemusic.core.protocol.proto.SearchResponse
-import org.lolicode.moemusic.core.protocol.proto.SelectionSubmitRequest
-import org.lolicode.moemusic.core.protocol.proto.SelectionSubmitResponse
-import org.lolicode.moemusic.core.protocol.proto.ServerHandshake
-import org.lolicode.moemusic.core.protocol.proto.StateUpdate
-import org.lolicode.moemusic.core.protocol.proto.SyncRequest
-import org.lolicode.moemusic.core.protocol.proto.SyncResponse
-import org.lolicode.moemusic.core.protocol.proto.SyncState
-import org.lolicode.moemusic.core.protocol.proto.TrackSubmitRequest
-import org.lolicode.moemusic.core.protocol.proto.TrackSubmitResponse
+import org.lolicode.moemusic.core.protocol.proto.*
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.Duration.Companion.milliseconds
 
-class StandaloneClientRuntime(
+class TerminalClientRuntime(
     val configDir: Path,
-    private val user: StandaloneUser,
+    private val user: TerminalUser,
     private val scope: CoroutineScope,
-) : StandaloneClientPacketSink {
+) : TerminalClientPacketSink {
 
     private class PendingRequestRegistry<T> {
         private val pending = ConcurrentHashMap<Long, CompletableDeferred<T>>()
@@ -116,7 +63,7 @@ class StandaloneClientRuntime(
         }
     }
 
-    private val logger = LoggerFactory.getLogger(StandaloneClientRuntime::class.java)
+    private val logger = LoggerFactory.getLogger(TerminalClientRuntime::class.java)
     private val timeSyncHandler = TimeSyncHandler()
     private val requestIdCounter = AtomicLong(1L)
     private val pendingSearchResponses = PendingRequestRegistry<SearchResponse>()
@@ -192,7 +139,7 @@ class StandaloneClientRuntime(
         private set
 
     @Volatile
-    var statusMessage: String = "Starting MoeMusic standalone..."
+    var statusMessage: String = "Starting MoeMusic for terminal..."
         private set
 
     @Volatile
@@ -213,7 +160,7 @@ class StandaloneClientRuntime(
 
     val playbackService: IClientPlaybackService = object : IClientPlaybackService {
         override val currentContext: TrackContext?
-            get() = this@StandaloneClientRuntime.currentContext
+            get() = this@TerminalClientRuntime.currentContext
 
         override val searchCatalog: ClientSearchCatalog?
             get() = sourceCatalog?.let { catalog ->
@@ -268,7 +215,7 @@ class StandaloneClientRuntime(
         }
 
         override fun syncParticipationWithCurrentConfig() {
-            this@StandaloneClientRuntime.syncParticipationWithCurrentConfig()
+            this@TerminalClientRuntime.syncParticipationWithCurrentConfig()
         }
     }
 
@@ -300,7 +247,7 @@ class StandaloneClientRuntime(
         stopPlaybackLockRetry()
         InstancePlaybackLock.release()
         audioRuntime.stop()
-        clearConnectionState(RuntimeException("Standalone runtime stopped."))
+        clearConnectionState(RuntimeException("Terminal runtime stopped."))
         CoreEvents.bus.fire(OnClientDisconnected)
     }
 
@@ -719,7 +666,7 @@ class StandaloneClientRuntime(
             PacketIds.CLIENT_HANDSHAKE,
             ClientHandshake(
                 locale = locale,
-                mod_version = "standalone-dev",
+                mod_version = "terminal-dev",
                 protocol_version = org.lolicode.moemusic.core.protocol.MoeMusicProtocol.VERSION,
                 initial_state = initialState,
             ).encode(),
@@ -817,7 +764,7 @@ class StandaloneClientRuntime(
 
     private inner class ClientTransport : ClientRequestTransport {
         override fun ensureDirectRequestSessionReady() {
-            check(participationRequested) { "MoeMusic standalone session is not initialized." }
+            check(participationRequested) { "MoeMusic terminal session is not initialized." }
             check(serverHandshakeReceived) { "MoeMusic server handshake has not completed yet." }
         }
 

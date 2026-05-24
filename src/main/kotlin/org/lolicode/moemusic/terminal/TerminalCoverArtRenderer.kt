@@ -1,4 +1,4 @@
-package org.lolicode.moemusic.standalone
+package org.lolicode.moemusic.terminal
 
 import com.googlecode.lanterna.TerminalTextUtils
 import com.googlecode.lanterna.TextCharacter
@@ -26,7 +26,7 @@ import java.util.Base64
 import javax.imageio.ImageIO
 import javax.imageio.ImageReader
 
-internal class StandaloneCoverArtRenderer(
+internal class TerminalCoverArtRenderer(
     private val scope: CoroutineScope,
 ) {
     private sealed interface CoverState {

@@ -1,4 +1,4 @@
-package org.lolicode.moemusic.standalone
+package org.lolicode.moemusic.terminal
 
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -8,39 +8,39 @@ import kotlin.system.exitProcess
 import kotlin.io.path.createDirectories
 
 fun main(args: Array<String>) {
-    val options = StandaloneOptions.parse(args) ?: return
+    val options = TerminalOptions.parse(args) ?: return
     options.configDir.createDirectories()
-    configureStandaloneLogging(options.configDir)
+    configureTerminalLogging(options.configDir)
 
     val terminal = try {
-        StandaloneTui.createTerminal(options.terminalMode, options.mouseMode)
-    } catch (e: StandaloneTerminalException) {
+        TerminalTui.createTerminal(options.terminalMode, options.mouseMode)
+    } catch (e: TerminalUnavailableException) {
         System.err.println(e.message)
         exitProcess(2)
     }
 
     try {
         TerminalLogRedirect(options.configDir).use {
-            StandaloneApplication(options.configDir).use { app ->
+            TerminalApplication(options.configDir).use { app ->
                 app.start()
-                StandaloneTui(
+                TerminalTui(
                     app = app,
                     terminal = terminal,
-                    options = StandaloneTui.Options(
+                    options = TerminalTui.Options(
                         mouseMode = options.mouseMode,
                         coverMode = options.coverMode,
                     ),
                 ).run()
             }
         }
-    } catch (e: StandaloneTerminalException) {
+    } catch (e: TerminalUnavailableException) {
         System.err.println(e.message)
         exitProcess(2)
     }
 }
 
-private fun configureStandaloneLogging(configDir: Path) {
-    val logFile = configDir.resolve(STANDALONE_LOG_FILE).toAbsolutePath().normalize()
+private fun configureTerminalLogging(configDir: Path) {
+    val logFile = configDir.resolve(TERMINAL_LOG_FILE).toAbsolutePath().normalize()
     System.setProperty(
         "org.slf4j.simpleLogger.logFile",
         System.getProperty("org.slf4j.simpleLogger.logFile") ?: logFile.toString(),
@@ -52,7 +52,7 @@ private class TerminalLogRedirect(
 ) : AutoCloseable {
     private val originalErr = System.err
     private val redirectedErr = PrintStream(
-        FileOutputStream(configDir.resolve(STANDALONE_LOG_FILE).toFile(), true),
+        FileOutputStream(configDir.resolve(TERMINAL_LOG_FILE).toFile(), true),
         true,
         Charsets.UTF_8,
     )
@@ -67,16 +67,16 @@ private class TerminalLogRedirect(
     }
 }
 
-private const val STANDALONE_LOG_FILE = "standalone.log"
+private const val TERMINAL_LOG_FILE = "terminal.log"
 
-data class StandaloneOptions(
+data class TerminalOptions(
     val configDir: Path = defaultConfigDir(),
     val terminalMode: TerminalMode = TerminalMode.AUTO,
     val mouseMode: MouseMode = MouseMode.AUTO,
     val coverMode: CoverMode = CoverMode.AUTO,
 ) {
     companion object {
-        fun parse(args: Array<String>): StandaloneOptions? {
+        fun parse(args: Array<String>): TerminalOptions? {
             var configDir = defaultConfigDir()
             var terminalMode = TerminalMode.AUTO
             var mouseMode = MouseMode.AUTO
@@ -121,13 +121,13 @@ data class StandaloneOptions(
                 }
                 index += 1
             }
-            return StandaloneOptions(configDir, terminalMode, mouseMode, coverMode)
+            return TerminalOptions(configDir, terminalMode, mouseMode, coverMode)
         }
 
         private fun printHelp() {
             println(
                 """
-                MoeMusic standalone prototype
+                MoeMusic terminal prototype
 
                 Options:
                   --config-dir <path>   Config directory. Defaults to the OS config directory.
@@ -188,17 +188,17 @@ fun defaultConfigDir(
     return when {
         "win" in normalizedOs -> {
             val base = env["APPDATA"].orEmpty().ifBlank { env["LOCALAPPDATA"].orEmpty() }
-            Paths.get(base.ifBlank { userHome }).resolve("MoeMusicStandalone")
+            Paths.get(base.ifBlank { userHome }).resolve("MoeMusicTerminal")
         }
 
         "mac" in normalizedOs || "darwin" in normalizedOs ->
-            Paths.get(userHome).resolve("Library").resolve("Application Support").resolve("MoeMusicStandalone")
+            Paths.get(userHome).resolve("Library").resolve("Application Support").resolve("MoeMusicTerminal")
 
         else -> {
             val base = env["XDG_CONFIG_HOME"].orEmpty().ifBlank {
                 Paths.get(userHome).resolve(".config").toString()
             }
-            Paths.get(base).resolve("moemusic-standalone")
+            Paths.get(base).resolve("moemusic-terminal")
         }
     }.toAbsolutePath().normalize()
 }
