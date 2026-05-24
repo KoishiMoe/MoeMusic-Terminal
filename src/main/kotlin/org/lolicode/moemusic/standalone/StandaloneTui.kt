@@ -25,6 +25,7 @@ import org.lolicode.moemusic.api.model.artistDisplay
 import org.lolicode.moemusic.api.service.PlaybackAction
 import org.lolicode.moemusic.core.config.ClientVolume
 import org.lolicode.moemusic.core.config.ModConfigManager
+import org.lolicode.moemusic.core.playback.parseLyrics
 import java.awt.GraphicsEnvironment
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -509,7 +510,11 @@ class StandaloneTui(
             val nowRect = Rect(content.x, content.y, nowWidth, content.height)
             val mainRect = Rect(content.x + nowWidth, content.y, content.width - nowWidth, content.height)
             drawNowPlayingPane(graphics, nowRect, compact = false)
-            drawActiveTab(graphics, mainRect)
+            if (currentTab == Tab.NOW_PLAYING) {
+                drawNowPlayingDetailsPane(graphics, mainRect)
+            } else {
+                drawActiveTab(graphics, mainRect)
+            }
             return
         }
 
@@ -599,6 +604,137 @@ class StandaloneTui(
         drawVolumeBar(graphics, Rect(body.x, body.bottom - 3, body.width, 1), interactive = true)
         drawPlaybackProgress(graphics, Rect(body.x, body.bottom - 2, body.width, 1), interactive = true)
         drawPlaybackButtons(graphics, Rect(body.x, body.bottom, body.width, 1))
+    }
+
+    private fun drawNowPlayingDetailsPane(graphics: TextGraphics, rect: Rect) {
+        drawPanel(graphics, rect, "Playback Details")
+        val body = rect.inset(1)
+        if (body.width <= 0 || body.height <= 0) return
+
+        val ctx = app.client.currentContext
+        if (ctx == null) {
+            putText(graphics, body.x, body.y, body.width, "No track loaded.", MUTED, PANEL_BG)
+            drawUpcomingTracks(graphics, Rect(body.x, body.y + 2, body.width, body.height - 2))
+            return
+        }
+
+        val lyricHeight = when {
+            body.height >= 22 -> (body.height * 55 / 100).coerceIn(8, body.height - 9)
+            body.height >= 14 -> (body.height - 7).coerceAtLeast(5)
+            else -> (body.height - 1).coerceAtLeast(0)
+        }
+
+        var y = body.y
+        drawSectionHeader(graphics, body.x, y, body.width, "Lyrics")
+        drawLyricPreview(graphics, Rect(body.x, y + 1, body.width, lyricHeight), ctx.track, app.client.currentPositionMs(ctx))
+        y += lyricHeight + 2
+        if (y > body.bottom) return
+
+        val remaining = body.bottom - y + 1
+        val detailsHeight = minOf(6, remaining)
+        drawSectionHeader(graphics, body.x, y, body.width, "Track")
+        drawTrackDetails(graphics, Rect(body.x, y + 1, body.width, detailsHeight - 1), ctx.track, ctx.state)
+        y += detailsHeight + 1
+        if (y > body.bottom) return
+
+        drawUpcomingTracks(graphics, Rect(body.x, y, body.width, body.bottom - y + 1))
+    }
+
+    private fun drawSectionHeader(graphics: TextGraphics, x: Int, y: Int, width: Int, title: String) {
+        putText(graphics, x, y, width, " $title ", ACCENT, PANEL_TITLE_BG, SGR.BOLD)
+    }
+
+    private fun drawLyricPreview(graphics: TextGraphics, rect: Rect, track: TrackInfo, positionMs: Long) {
+        if (rect.width <= 0 || rect.height <= 0) return
+        val parsed = parseLyrics(track.lyricLrc)
+        if (parsed == null) {
+            val message = if (track.lyricsFetched) "No lyrics available." else "Lyrics not loaded."
+            putText(graphics, rect.x, rect.y, rect.width, message, MUTED, PANEL_BG)
+            return
+        }
+
+        val effectiveMs = positionMs - parsed.offsetMs
+        val activeIndex = parsed.lines.indexOfLast { it.startMs <= effectiveMs }
+        val start = if (activeIndex < 0) {
+            0
+        } else {
+            (activeIndex - rect.height / 2)
+                .coerceAtLeast(0)
+                .coerceAtMost((parsed.lines.size - rect.height).coerceAtLeast(0))
+        }
+        val secondaryLine = parseLyrics(track.secondaryLyricLrc)
+            ?.lineAt(positionMs)
+            ?.text
+            ?.takeIf { it.isNotBlank() }
+
+        for (row in 0 until rect.height) {
+            val lineIndex = start + row
+            val line = parsed.lines.getOrNull(lineIndex) ?: break
+            val active = lineIndex == activeIndex
+            val text = if (active && secondaryLine != null) {
+                "${line.text} / $secondaryLine"
+            } else {
+                line.text
+            }
+            putText(
+                graphics,
+                rect.x,
+                rect.y + row,
+                rect.width,
+                "${if (active) ">" else " "} ${formatTime(line.startMs)}  $text",
+                if (active) LYRIC else MUTED,
+                PANEL_BG,
+                if (active) SGR.BOLD else null,
+            )
+        }
+    }
+
+    private fun drawTrackDetails(graphics: TextGraphics, rect: Rect, track: TrackInfo, state: PlaybackState) {
+        if (rect.width <= 0 || rect.height <= 0) return
+        val lyricStatus = when {
+            parseLyrics(track.lyricLrc) != null -> "available"
+            track.lyricsFetched -> "unavailable"
+            else -> "not loaded"
+        }
+        val details = listOf(
+            "State" to playbackStateLabel(state),
+            "Album" to (track.album?.takeIf { it.isNotBlank() } ?: "-"),
+            "Source" to sourceDisplayName(track.sourceId).ifBlank { "-" },
+            "Duration" to formatTime(track.durationMs),
+            "Submitted" to (track.submittedByUserName?.takeIf { it.isNotBlank() } ?: "local"),
+            "Track ID" to track.id,
+            "Lyrics" to lyricStatus,
+        )
+        details.take(rect.height).forEachIndexed { index, (label, value) ->
+            putText(graphics, rect.x, rect.y + index, rect.width, "${label.padEnd(9)} $value", MUTED, PANEL_BG)
+        }
+    }
+
+    private fun drawUpcomingTracks(graphics: TextGraphics, rect: Rect) {
+        if (rect.width <= 0 || rect.height <= 0) return
+        drawSectionHeader(graphics, rect.x, rect.y, rect.width, "Up Next")
+        val listRect = Rect(rect.x, rect.y + 1, rect.width, rect.height - 1)
+        if (listRect.height <= 0) return
+
+        val tracks = app.client.queueTracks
+        if (tracks.isEmpty()) {
+            putText(graphics, listRect.x, listRect.y, listRect.width, "Queue is empty.", MUTED, PANEL_BG)
+            return
+        }
+
+        tracks.take(listRect.height).forEachIndexed { index, track ->
+            val row = Rect(listRect.x, listRect.y + index, listRect.width, 1)
+            val background = if (index % 2 == 0) ROW_BG else ROW_ALT_BG
+            fillRect(graphics, row, background)
+            val artist = track.artistDisplay.takeIf { it.isNotBlank() && it != "-" }
+            val title = track.title.ifBlank { track.id }
+            val label = if (artist == null) "${index + 1}. $title" else "${index + 1}. $title | $artist"
+            putText(graphics, row.x + 1, row.y, row.width - 2, label, TEXT, background)
+            addHit(row) {
+                currentTab = Tab.QUEUE
+                selectedQueueIndex = index.coerceSelection(app.client.queueTracks.size)
+            }
+        }
     }
 
     private fun drawSearchPane(graphics: TextGraphics, rect: Rect) {
