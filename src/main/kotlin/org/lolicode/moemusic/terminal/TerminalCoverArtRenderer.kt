@@ -37,6 +37,7 @@ internal class TerminalCoverArtRenderer(
             val png: ByteArray,
             val pngWidth: Int,
             val pngHeight: Int,
+            val sixel: String?,
         ) : CoverState
     }
 
@@ -84,12 +85,19 @@ internal class TerminalCoverArtRenderer(
             return
         }
 
-        val useTerminalImage = frameProtocol != null && coverMode != CoverMode.UNICODE
-        val key = "$url#$width.$height#${if (useTerminalImage) "terminal" else if (frameSupportsUnicodeBlocks) "cells-unicode" else "cells-ansi"}"
+        val protocol = if (coverMode == CoverMode.UNICODE) null else frameProtocol
+        val unicodeBlocks = frameSupportsUnicodeBlocks
+        val key = "$url#$width.$height#${
+            when {
+                protocol != null -> "terminal-${protocol.name.lowercase()}"
+                unicodeBlocks -> "cells-unicode"
+                else -> "cells-ansi"
+            }
+        }"
         when (val state = stateFor(key)) {
             null -> {
                 remember(key, CoverState.Loading)
-                loadAsync(key, url, width, height, useTerminalImage)
+                loadAsync(key, url, width, height, protocol, unicodeBlocks)
                 drawPlaceholder(graphics, x, y, width, height, "loading")
             }
 
@@ -109,6 +117,7 @@ internal class TerminalCoverArtRenderer(
                         png = state.png,
                         pngWidth = state.pngWidth,
                         pngHeight = state.pngHeight,
+                        sixel = state.sixel,
                     )
                 } else {
                     drawCells(graphics, x, y, width, height, state.cells)
@@ -165,20 +174,33 @@ internal class TerminalCoverArtRenderer(
         }
     }
 
-    private fun loadAsync(key: String, url: String, width: Int, height: Int, terminalImage: Boolean) {
+    private fun loadAsync(
+        key: String,
+        url: String,
+        width: Int,
+        height: Int,
+        protocol: TerminalImageProtocol?,
+        unicodeBlocks: Boolean,
+    ) {
         scope.launch {
             val state = runCatching {
                 when (ClientMediaFirewall.evaluate(url)) {
                     MediaUrlPolicyResult.Allow -> Unit
                     is MediaUrlPolicyResult.Reject -> error("Blocked by local media policy")
                 }
+                val terminalImage = protocol != null
                 val limits = coverLimits(width, height, terminalImage)
                 val source = loadCoverImage(url, limits)
                 CoverState.Ready(
-                    cells = renderCells(source, width, height, unicodeBlocks = frameSupportsUnicodeBlocks),
+                    cells = renderCells(source, width, height, unicodeBlocks = unicodeBlocks),
                     png = encodePng(source),
                     pngWidth = source.width,
                     pngHeight = source.height,
+                    sixel = if (protocol == TerminalImageProtocol.SIXEL) {
+                        encodeSixel(source, width, height)
+                    } else {
+                        null
+                    },
                 )
             }.getOrElse {
                 CoverState.Failed
@@ -317,6 +339,25 @@ internal class TerminalCoverArtRenderer(
             output.toByteArray()
         }
 
+    private fun encodeSixel(source: BufferedImage, width: Int, height: Int): String {
+        val scaled = BufferedImage(
+            (width * SIXEL_CELL_PIXEL_WIDTH).coerceAtLeast(1),
+            (height * SIXEL_CELL_PIXEL_HEIGHT).coerceAtLeast(1),
+            BufferedImage.TYPE_INT_RGB,
+        )
+        val graphics = scaled.createGraphics()
+        try {
+            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+            graphics.background = java.awt.Color(18, 18, 22)
+            graphics.clearRect(0, 0, scaled.width, scaled.height)
+            graphics.drawImage(source, 0, 0, scaled.width, scaled.height, null)
+        } finally {
+            graphics.dispose()
+        }
+        return TerminalSixelEncoder.encode(scaled)
+    }
+
     private fun drawCells(
         graphics: TextGraphics,
         x: Int,
@@ -369,6 +410,7 @@ internal class TerminalCoverArtRenderer(
             TerminalImageProtocol.KITTY,
             TerminalImageProtocol.KITTY_CELL_RECT,
             -> writeKittyImage(terminal, request)
+            TerminalImageProtocol.SIXEL -> writeSixelImage(terminal, request)
         }
     }
 
@@ -380,6 +422,7 @@ internal class TerminalCoverArtRenderer(
                 TerminalRawWriter.write(terminal, "\u001B_Ga=d,d=i,i=${request.imageId},q=2;\u001B\\")
                 terminal.flush()
             }
+            TerminalImageProtocol.SIXEL -> clearSixelImage(terminal, request)
         }
     }
 
@@ -401,6 +444,22 @@ internal class TerminalCoverArtRenderer(
             TerminalRawWriter.write(terminal, "\u001B_G$params;$chunk\u001B\\")
             offset = nextOffset
             firstChunk = false
+        }
+        terminal.flush()
+    }
+
+    private fun writeSixelImage(terminal: Terminal, request: TerminalImageRequest) {
+        val sixel = request.sixel ?: return
+        terminal.setCursorPosition(request.x, request.y)
+        TerminalRawWriter.write(terminal, "\u001BPq$sixel\u001B\\")
+        terminal.flush()
+    }
+
+    private fun clearSixelImage(terminal: Terminal, request: TerminalImageRequest) {
+        val blankLine = " ".repeat(request.width)
+        for (row in 0 until request.height) {
+            terminal.setCursorPosition(request.x, request.y + row)
+            TerminalRawWriter.write(terminal, blankLine)
         }
         terminal.flush()
     }
@@ -444,6 +503,8 @@ internal class TerminalCoverArtRenderer(
         private const val COVER_READ_TIMEOUT_MS = 5_000
         private const val TERMINAL_IMAGE_ID_BASE = 4000
         private const val KITTY_CHUNK_SIZE = 4096
+        private const val SIXEL_CELL_PIXEL_WIDTH = 8
+        private const val SIXEL_CELL_PIXEL_HEIGHT = 16
         private const val UPPER_HALF_BLOCK = '\u2580'
         private val PLACEHOLDER_FG = TextColor.RGB(150, 156, 166)
         private val PLACEHOLDER_BG = TextColor.RGB(31, 34, 42)
@@ -460,6 +521,7 @@ private data class TerminalImageRequest(
     val png: ByteArray,
     val pngWidth: Int,
     val pngHeight: Int,
+    val sixel: String?,
 ) {
     fun samePlacementAs(other: TerminalImageRequest): Boolean =
         protocol == other.protocol &&
@@ -470,7 +532,8 @@ private data class TerminalImageRequest(
             height == other.height &&
             pngWidth == other.pngWidth &&
             pngHeight == other.pngHeight &&
-            png.contentEquals(other.png)
+            png.contentEquals(other.png) &&
+            sixel == other.sixel
 }
 
 private enum class TerminalImageProtocol(
@@ -478,6 +541,7 @@ private enum class TerminalImageProtocol(
 ) {
     KITTY(constrainRows = false),
     KITTY_CELL_RECT(constrainRows = true),
+    SIXEL(constrainRows = false),
     ;
 
     companion object {
@@ -487,6 +551,7 @@ private enum class TerminalImageProtocol(
             if (!isTextTerminal(terminal)) return null
             return when (coverMode) {
                 CoverMode.KITTY -> if (isKonsoleEnvironment()) KITTY_CELL_RECT else KITTY
+                CoverMode.SIXEL -> SIXEL
                 CoverMode.TERMINAL -> detect()
                 CoverMode.AUTO -> detect()
                 CoverMode.UNICODE, CoverMode.OFF -> null
@@ -496,11 +561,12 @@ private enum class TerminalImageProtocol(
         private fun detect(): TerminalImageProtocol? =
             when {
                 isKonsoleEnvironment() -> KITTY_CELL_RECT
-                isKnownSupportedEnvironment() -> KITTY
+                isKnownKittyEnvironment() -> KITTY
+                isKnownSixelEnvironment() -> SIXEL
                 else -> null
             }
 
-        private fun isKnownSupportedEnvironment(): Boolean {
+        private fun isKnownKittyEnvironment(): Boolean {
             val env = System.getenv()
             val term = env["TERM"].orEmpty().lowercase()
             val termProgram = env["TERM_PROGRAM"].orEmpty().lowercase()
@@ -509,6 +575,16 @@ private enum class TerminalImageProtocol(
                 termProgram in setOf("kitty", "wezterm", "ghostty") ||
                 "wezterm" in termProgram ||
                 "ghostty" in termProgram
+        }
+
+        private fun isKnownSixelEnvironment(env: Map<String, String> = System.getenv()): Boolean {
+            val term = env["TERM"].orEmpty().lowercase()
+            val termProgram = env["TERM_PROGRAM"].orEmpty().lowercase()
+            return "sixel" in term ||
+                "sixel" in termProgram ||
+                term in setOf("mlterm", "foot", "foot-direct", "contour", "yaft", "mintty") ||
+                termProgram in setOf("mlterm", "foot", "contour", "mintty", "rio") ||
+                env["MLTERM"] != null
         }
 
         private fun isKonsoleEnvironment(env: Map<String, String> = System.getenv()): Boolean {

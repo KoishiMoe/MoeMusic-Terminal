@@ -115,7 +115,7 @@ data class TerminalOptions(
 
                     "--cover" -> {
                         val value = args.getOrNull(index + 1)
-                            ?: error("--cover requires one of: auto, terminal, kitty, unicode, off")
+                            ?: error("--cover requires one of: auto, terminal, kitty, sixel, unicode, off")
                         coverMode = CoverMode.parse(value)
                         index += 1
                     }
@@ -136,7 +136,7 @@ data class TerminalOptions(
                   --config-dir <path>   Config directory. Defaults to the OS config directory.
                   --terminal <mode>     Terminal mode: auto, text, or swing. Defaults to auto.
                   --mouse <mode>        Mouse mode: auto, on, or off. Defaults to auto.
-                  --cover <mode>        Cover display: auto, terminal, kitty, unicode, or off. Defaults to auto.
+                  --cover <mode>        Cover display: auto, terminal, kitty, sixel, unicode, or off. Defaults to auto.
                   -h, --help            Show this help.
                 """.trimIndent(),
             )
@@ -165,6 +165,7 @@ enum class CoverMode {
     AUTO,
     TERMINAL,
     KITTY,
+    SIXEL,
     UNICODE,
     OFF,
     ;
@@ -175,9 +176,10 @@ enum class CoverMode {
                 "auto" -> AUTO
                 "terminal", "image", "images" -> TERMINAL
                 "kitty" -> KITTY
+                "sixel" -> SIXEL
                 "unicode", "text" -> UNICODE
                 "off", "false", "no" -> OFF
-                else -> error("Unknown cover mode '$value'. Expected one of: auto, terminal, kitty, unicode, off")
+                else -> error("Unknown cover mode '$value'. Expected one of: auto, terminal, kitty, sixel, unicode, off")
             }
     }
 }

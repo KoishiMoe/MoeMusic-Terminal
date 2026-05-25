@@ -51,12 +51,14 @@ Optional TUI features:
 ./build/install/moemusic-terminal/bin/moemusic-terminal --mouse off
 ./build/install/moemusic-terminal/bin/moemusic-terminal --cover off
 ./build/install/moemusic-terminal/bin/moemusic-terminal --cover kitty
+./build/install/moemusic-terminal/bin/moemusic-terminal --cover sixel
 ```
 
 Mouse support defaults to `auto` and depends on the terminal emitting mouse events. Cover display
-defaults to terminal images on known Kitty-protocol terminals, otherwise Unicode half-block
-rendering. Use `--cover kitty` to force Kitty graphics, `--cover terminal` for conservative
-terminal-image detection, `--cover unicode` for text rendering, or `--cover off` to disable covers.
+defaults to terminal images on known Kitty-protocol or sixel terminals, otherwise Unicode half-block
+rendering. Use `--cover kitty` to force Kitty graphics, `--cover sixel` to force sixel graphics,
+`--cover terminal` for conservative terminal-image detection, `--cover unicode` for text rendering,
+or `--cover off` to disable covers.
 Covers still fall back to an inline placeholder when a cover is missing, blocked by client media
 policy, or fails to decode.
 
