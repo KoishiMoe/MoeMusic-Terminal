@@ -1587,24 +1587,28 @@ class TerminalTui(
         fun createTerminal(terminalMode: TerminalMode, mouseMode: MouseMode = MouseMode.AUTO): Terminal {
             val textFactory = newTerminalFactory(mouseMode).setForceTextTerminal(true)
             return when (terminalMode) {
-                TerminalMode.TEXT -> createTextTerminal(textFactory)
+                TerminalMode.TEXT -> createTextTerminal(textFactory, mouseMode)
                 TerminalMode.SWING -> newTerminalFactory(mouseMode).createTerminalEmulator()
                 TerminalMode.AUTO -> runCatching {
-                    createTextTerminal(textFactory)
+                    createTextTerminal(textFactory, mouseMode)
                 }.getOrElse { textError ->
                     if (isAwtHeadless()) {
-                        throw terminalUnavailable(textError)
+                        throw textError.asTerminalUnavailable()
                     }
                     newTerminalFactory(mouseMode).createTerminalEmulator()
                 }
             }
         }
 
-        private fun createTextTerminal(factory: DefaultTerminalFactory): Terminal =
+        private fun createTextTerminal(factory: DefaultTerminalFactory, mouseMode: MouseMode): Terminal =
             try {
-                factory.createTerminal()
-            } catch (e: IOException) {
-                throw terminalUnavailable(e)
+                if (isOperatingSystemWindows()) {
+                    JLineTextTerminal.open(mouseMode)
+                } else {
+                    factory.createTerminal()
+                }
+            } catch (e: Throwable) {
+                throw e.asTerminalUnavailable()
             }
 
         private fun newTerminalFactory(mouseMode: MouseMode): DefaultTerminalFactory =
@@ -1621,23 +1625,41 @@ class TerminalTui(
             TerminalUnavailableException(
                 buildString {
                     appendLine("MoeMusic terminal could not open a text terminal.")
-                    appendLine("Lanterna needs a controlling TTY for its Unix backend, but this process has none.")
-                    appendLine()
-                    appendLine("Recommended:")
-                    appendLine("  ./gradlew -p . installDist")
-                    appendLine("  ./build/install/moemusic-terminal/bin/moemusic-terminal")
-                    appendLine()
-                    appendLine("Alternatives:")
-                    appendLine("  Use --terminal swing on desktop systems.")
-                    appendLine("  Use --terminal text only when running from a real terminal, not a detached Gradle/IDE process.")
+                    if (isOperatingSystemWindows()) {
+                        appendLine("A Windows console session was not available to the text terminal backend.")
+                        appendLine()
+                        appendLine("Recommended:")
+                        appendLine("  gradlew.bat installDist")
+                        appendLine("  build\\install\\moemusic-terminal\\bin\\moemusic-terminal.bat")
+                        appendLine()
+                        appendLine("Alternatives:")
+                        appendLine("  Run --terminal text from Windows Terminal, PowerShell, or cmd.")
+                        appendLine("  Use --terminal swing when launching from a detached IDE/Gradle process.")
+                    } else {
+                        appendLine("Lanterna needs a controlling TTY for its Unix backend, but this process has none.")
+                        appendLine()
+                        appendLine("Recommended:")
+                        appendLine("  ./gradlew -p . installDist")
+                        appendLine("  ./build/install/moemusic-terminal/bin/moemusic-terminal")
+                        appendLine()
+                        appendLine("Alternatives:")
+                        appendLine("  Use --terminal swing on desktop systems.")
+                        appendLine("  Use --terminal text only when running from a real terminal, not a detached Gradle/IDE process.")
+                    }
                     append("Cause: ")
                     append(cause.message ?: cause.javaClass.simpleName)
                 },
                 cause,
             )
 
+        private fun Throwable.asTerminalUnavailable(): TerminalUnavailableException =
+            this as? TerminalUnavailableException ?: terminalUnavailable(this)
+
         private fun isAwtHeadless(): Boolean =
             runCatching { GraphicsEnvironment.isHeadless() }.getOrDefault(true)
+
+        private fun isOperatingSystemWindows(): Boolean =
+            System.getProperty("os.name").orEmpty().lowercase().startsWith("windows")
 
         private const val WIDE_LAYOUT_MIN_WIDTH = 112
         private const val SEARCH_ROW_HEIGHT = 2

@@ -24,6 +24,14 @@ the JVM without a controlling `/dev/tty`, which Lanterna needs on Unix-like syst
 ./build/install/moemusic-terminal/bin/moemusic-terminal
 ```
 
+On Windows, use the generated launcher from Windows Terminal, PowerShell, or `cmd.exe` so the
+JLine backend can attach to the active console:
+
+```powershell
+gradlew.bat installDist
+build\install\moemusic-terminal\bin\moemusic-terminal.bat
+```
+
 Useful arguments:
 
 ```bash
