@@ -577,16 +577,6 @@ private enum class TerminalImageProtocol(
                 "ghostty" in termProgram
         }
 
-        private fun isKnownSixelEnvironment(env: Map<String, String> = System.getenv()): Boolean {
-            val term = env["TERM"].orEmpty().lowercase()
-            val termProgram = env["TERM_PROGRAM"].orEmpty().lowercase()
-            return "sixel" in term ||
-                "sixel" in termProgram ||
-                term in setOf("mlterm", "foot", "foot-direct", "contour", "yaft", "mintty") ||
-                termProgram in setOf("mlterm", "foot", "contour", "mintty", "rio") ||
-                env["MLTERM"] != null
-        }
-
         private fun isKonsoleEnvironment(env: Map<String, String> = System.getenv()): Boolean {
             val termProgram = env["TERM_PROGRAM"].orEmpty().lowercase()
             return "konsole" in termProgram || env["KONSOLE_VERSION"] != null
@@ -597,6 +587,17 @@ private enum class TerminalImageProtocol(
             return ".swing." !in className && ".awt" !in className
         }
     }
+}
+
+internal fun isKnownSixelEnvironment(env: Map<String, String> = System.getenv()): Boolean {
+    val term = env["TERM"].orEmpty().lowercase()
+    val termProgram = env["TERM_PROGRAM"].orEmpty().lowercase()
+    return "sixel" in term ||
+        "sixel" in termProgram ||
+        term in setOf("mlterm", "foot", "foot-direct", "contour", "yaft", "mintty") ||
+        termProgram in setOf("mlterm", "foot", "contour", "mintty", "rio") ||
+        env["WT_SESSION"] != null ||
+        env["MLTERM"] != null
 }
 
 private object TerminalRawWriter {
