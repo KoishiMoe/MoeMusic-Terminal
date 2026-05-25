@@ -23,6 +23,9 @@ fun main(args: Array<String>) {
         TerminalLogRedirect(options.configDir).use {
             TerminalApplication(options.configDir).use { app ->
                 app.start()
+                if (terminal is TerminalCompatibilityInfo) {
+                    terminal.startupStatusMessage()?.let(app.client::setStatus)
+                }
                 TerminalTui(
                     app = app,
                     terminal = terminal,

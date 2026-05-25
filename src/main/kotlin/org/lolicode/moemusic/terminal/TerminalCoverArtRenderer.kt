@@ -53,12 +53,14 @@ internal class TerminalCoverArtRenderer(
     private val terminalImageIds = LinkedHashMap<String, Int>()
     private var nextTerminalImageId = TERMINAL_IMAGE_ID_BASE
     private var frameProtocol: TerminalImageProtocol? = null
+    private var frameSupportsUnicodeBlocks = true
     private var requestedTerminalImage: TerminalImageRequest? = null
     private var renderedTerminalImage: TerminalImageRequest? = null
     private var terminalImageInvalidated = false
 
     fun beginFrame(terminal: Terminal, coverMode: CoverMode) {
         frameProtocol = TerminalImageProtocol.select(terminal, coverMode)
+        frameSupportsUnicodeBlocks = terminalSupportsUnicodeBlocks(terminal)
         requestedTerminalImage = null
     }
 
@@ -83,7 +85,7 @@ internal class TerminalCoverArtRenderer(
         }
 
         val useTerminalImage = frameProtocol != null && coverMode != CoverMode.UNICODE
-        val key = "$url#$width.$height#${if (useTerminalImage) "terminal" else "cells"}"
+        val key = "$url#$width.$height#${if (useTerminalImage) "terminal" else if (frameSupportsUnicodeBlocks) "cells-unicode" else "cells-ansi"}"
         when (val state = stateFor(key)) {
             null -> {
                 remember(key, CoverState.Loading)
@@ -173,7 +175,7 @@ internal class TerminalCoverArtRenderer(
                 val limits = coverLimits(width, height, terminalImage)
                 val source = loadCoverImage(url, limits)
                 CoverState.Ready(
-                    cells = renderCells(source, width, height),
+                    cells = renderCells(source, width, height, unicodeBlocks = frameSupportsUnicodeBlocks),
                     png = encodePng(source),
                     pngWidth = source.width,
                     pngHeight = source.height,
@@ -275,7 +277,12 @@ internal class TerminalCoverArtRenderer(
         }
     }
 
-    private fun renderCells(source: BufferedImage, width: Int, height: Int): List<List<TextCharacter>> {
+    private fun renderCells(
+        source: BufferedImage,
+        width: Int,
+        height: Int,
+        unicodeBlocks: Boolean,
+    ): List<List<TextCharacter>> {
         val targetHeight = height * 2
         val scaled = BufferedImage(width, targetHeight, BufferedImage.TYPE_INT_RGB)
         val graphics = scaled.createGraphics()
@@ -292,7 +299,12 @@ internal class TerminalCoverArtRenderer(
             List(width) { col ->
                 val top = scaled.getRGB(col, row * 2)
                 val bottom = scaled.getRGB(col, row * 2 + 1)
-                TextCharacter(UPPER_HALF_BLOCK, rgb(top), rgb(bottom))
+                if (unicodeBlocks) {
+                    TextCharacter(UPPER_HALF_BLOCK, rgb(top), rgb(bottom))
+                } else {
+                    val blended = blend(top, bottom)
+                    TextCharacter(' ', blended, blended)
+                }
             }
         }
     }
@@ -413,6 +425,16 @@ internal class TerminalCoverArtRenderer(
             (argb ushr 8) and 0xFF,
             argb and 0xFF,
         )
+
+    private fun blend(top: Int, bottom: Int): TextColor.RGB =
+        TextColor.RGB(
+            (((top ushr 16) and 0xFF) + ((bottom ushr 16) and 0xFF)) / 2,
+            (((top ushr 8) and 0xFF) + ((bottom ushr 8) and 0xFF)) / 2,
+            ((top and 0xFF) + (bottom and 0xFF)) / 2,
+        )
+
+    private fun terminalSupportsUnicodeBlocks(terminal: Terminal): Boolean =
+        (terminal as? TerminalCompatibilityInfo)?.supportsUnicodeGlyph(UPPER_HALF_BLOCK) ?: true
 
     private companion object {
         private const val MIN_COVER_WIDTH = 12

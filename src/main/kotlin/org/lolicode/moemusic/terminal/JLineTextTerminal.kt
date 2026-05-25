@@ -1,11 +1,30 @@
 package org.lolicode.moemusic.terminal
 
 import com.googlecode.lanterna.TerminalSize
-import com.googlecode.lanterna.terminal.MouseCaptureMode
 import com.googlecode.lanterna.terminal.Terminal
 import com.googlecode.lanterna.terminal.ansi.ANSITerminal
+import com.googlecode.lanterna.input.BasicCharacterPattern
+import com.googlecode.lanterna.input.CharacterPattern
+import com.googlecode.lanterna.input.KeyDecodingProfile
+import com.googlecode.lanterna.input.KeyStroke
+import com.googlecode.lanterna.input.KeyType
 import org.jline.terminal.TerminalBuilder
+import java.nio.charset.Charset
 import java.util.concurrent.atomic.AtomicBoolean
+
+internal interface TerminalCompatibilityInfo {
+    val terminalCharset: Charset
+
+    fun supportsUnicodeGlyph(character: Char): Boolean =
+        terminalCharset.newEncoder().canEncode(character)
+
+    fun startupStatusMessage(): String? =
+        if (terminalCharset == Charsets.UTF_8) {
+            null
+        } else {
+            "Console charset ${terminalCharset.displayName()} detected; some Unicode text and cover glyphs may degrade. Enable UTF-8 for full rendering."
+        }
+}
 
 internal class JLineTextTerminal private constructor(
     private val jlineTerminal: org.jline.terminal.Terminal,
@@ -14,16 +33,24 @@ internal class JLineTextTerminal private constructor(
         jlineTerminal.input(),
         jlineTerminal.output(),
         jlineTerminal.encoding(),
-    ) {
+    ), TerminalCompatibilityInfo {
+
+    override val terminalCharset: Charset = jlineTerminal.encoding()
 
     private val closed = AtomicBoolean(false)
     private val previousWinchHandler = jlineTerminal.handle(org.jline.terminal.Terminal.Signal.WINCH) { refreshSize() }
 
     init {
         jlineTerminal.enterRawMode()
-        if (mouseMode != MouseMode.OFF) {
-            setMouseCaptureMode(MouseCaptureMode.CLICK_RELEASE_DRAG)
-        }
+        getInputDecoder().addProfile(WindowsEnterKeyDecodingProfile)
+        jlineTerminal.trackMouse(
+            if (mouseMode == MouseMode.OFF) {
+                org.jline.terminal.Terminal.MouseTracking.Off
+            } else {
+                org.jline.terminal.Terminal.MouseTracking.Button
+            },
+        )
+        jlineTerminal.resume()
         refreshSize()
     }
 
@@ -66,5 +93,13 @@ internal class JLineTextTerminal private constructor(
                     .build(),
                 mouseMode,
             )
+
+        private object WindowsEnterKeyDecodingProfile : KeyDecodingProfile {
+            private val patterns = listOf<CharacterPattern>(
+                BasicCharacterPattern(KeyStroke(KeyType.Enter), '\r'),
+            )
+
+            override fun getPatterns(): Collection<CharacterPattern> = patterns
+        }
     }
 }
