@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "org.lolicode.moemusic"
-version = "1.0.0-dev"
+version = "1.0.0"
 
 kotlin {
     compilerOptions {
@@ -51,4 +51,10 @@ tasks.test {
 
 tasks.named<JavaExec>("run") {
     standardInput = System.`in`
+}
+
+tasks.register("printVersion") {
+    doLast {
+        println(project.version)
+    }
 }
