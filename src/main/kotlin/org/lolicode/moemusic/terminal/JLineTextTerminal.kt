@@ -10,6 +10,7 @@ import com.googlecode.lanterna.input.KeyStroke
 import com.googlecode.lanterna.input.KeyType
 import org.jline.terminal.TerminalBuilder
 import java.nio.charset.Charset
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal interface TerminalCompatibilityInfo {
@@ -88,6 +89,12 @@ internal class JLineTextTerminal private constructor(
                     .name("MoeMusic Terminal")
                     .system(true)
                     .dumb(false)
+                    // The Windows backend injects X10 mouse sequences into this pipe.
+                    // High-column clicks use non-ASCII coordinate chars, so keep the pipe Unicode-safe.
+                    .encoding(StandardCharsets.UTF_8)
+                    .stdinEncoding(StandardCharsets.UTF_8)
+                    .stdoutEncoding(StandardCharsets.UTF_8)
+                    .stderrEncoding(StandardCharsets.UTF_8)
                     .nativeSignals(true)
                     .paused(true)
                     .build(),
