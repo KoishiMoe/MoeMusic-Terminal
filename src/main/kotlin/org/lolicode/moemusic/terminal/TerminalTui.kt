@@ -1624,7 +1624,7 @@ class TerminalTui(
                     appendLine("Lanterna needs a controlling TTY for its Unix backend, but this process has none.")
                     appendLine()
                     appendLine("Recommended:")
-                    appendLine("  ../shared/gradlew -p . installDist")
+                    appendLine("  ./gradlew -p . installDist")
                     appendLine("  ./build/install/moemusic-terminal/bin/moemusic-terminal")
                     appendLine()
                     appendLine("Alternatives:")
