@@ -14,6 +14,9 @@ import org.lolicode.moemusic.clientcore.playback.ClientVolumeController
 import org.lolicode.moemusic.clientcore.playback.InstancePlaybackLock
 import org.lolicode.moemusic.clientcore.playback.SearchSourceCatalog
 import org.lolicode.moemusic.clientcore.playback.SearchSourceInfo
+import org.lolicode.moemusic.clientcore.playback.ServerWelcomeRejection
+import org.lolicode.moemusic.clientcore.playback.ServerWelcomeRejectionReason
+import org.lolicode.moemusic.clientcore.playback.toLocalizedText
 import org.lolicode.moemusic.clientcore.request.ClientRequestTransport
 import org.lolicode.moemusic.clientcore.request.DirectClientRequestService
 import org.lolicode.moemusic.core.config.ClientVolume
@@ -26,6 +29,7 @@ import org.lolicode.moemusic.core.media.MediaUrlPolicyResult
 import org.lolicode.moemusic.core.playback.TimeSyncHandler
 import org.lolicode.moemusic.core.playback.parseLyrics
 import org.lolicode.moemusic.core.playback.toApi
+import org.lolicode.moemusic.core.protocol.MoeMusicProtocol
 import org.lolicode.moemusic.core.protocol.PacketId
 import org.lolicode.moemusic.core.protocol.PacketIds
 import org.lolicode.moemusic.core.protocol.proto.*
@@ -152,6 +156,9 @@ class TerminalClientRuntime(
 
     @Volatile
     private var serverSessionAccepted: Boolean = false
+
+    @Volatile
+    private var lastServerWelcomeRejection: ServerWelcomeRejection? = null
 
     @Volatile
     private var timeSyncEstablished: Boolean = false
@@ -319,9 +326,9 @@ class TerminalClientRuntime(
         serverHandshakeReceived = true
         serverSessionAccepted = msg.accepted
         if (!msg.accepted) {
-            val failure = msg.failure.ifBlank {
-                "MoeMusic server rejected the terminal client handshake (server protocol ${msg.server_protocol_version})."
-            }
+            val rejection = serverWelcomeRejection(msg)
+            lastServerWelcomeRejection = rejection
+            val failure = renderServerWelcomeRejection(rejection)
             setStatus(failure)
             sourceCatalog = null
             playbackRegistrationActive = false
@@ -332,6 +339,7 @@ class TerminalClientRuntime(
             clearPendingRequests(ClientRequestException(failure))
             return
         }
+        lastServerWelcomeRejection = null
 
         sourceCatalog = SearchSourceCatalog(
             sources = msg.sources.map { source ->
@@ -742,6 +750,7 @@ class TerminalClientRuntime(
         playbackRegistrationActive = false
         serverHandshakeReceived = false
         serverSessionAccepted = false
+        lastServerWelcomeRejection = null
         sourceCatalog = null
         val now = System.nanoTime()
         channel.sendToServer(
@@ -749,7 +758,7 @@ class TerminalClientRuntime(
             ClientHandshake(
                 locale = locale,
                 mod_version = "terminal-dev",
-                protocol_version = org.lolicode.moemusic.core.protocol.MoeMusicProtocol.VERSION,
+                protocol_version = MoeMusicProtocol.VERSION,
                 initial_state = initialState,
                 client_send_monotonic = now,
             ).encode(),
@@ -793,6 +802,7 @@ class TerminalClientRuntime(
         playbackRegistrationActive = false
         serverHandshakeReceived = false
         serverSessionAccepted = false
+        lastServerWelcomeRejection = null
         timeSyncEstablished = false
         serverClockOffset = 0L
         sourceCatalog = null
@@ -804,6 +814,28 @@ class TerminalClientRuntime(
         serverClockOffset = timeSyncHandler.computeClientOffset(response)
         timeSyncEstablished = true
     }
+
+    private fun serverWelcomeRejection(msg: ServerWelcome): ServerWelcomeRejection =
+        ServerWelcomeRejection(
+            reason = when (msg.reject_reason) {
+                ServerWelcomeRejectReason.SERVER_WELCOME_REJECT_PROTOCOL_MISMATCH ->
+                    ServerWelcomeRejectionReason.PROTOCOL_MISMATCH
+                ServerWelcomeRejectReason.SERVER_WELCOME_REJECT_SERVER_ERROR ->
+                    ServerWelcomeRejectionReason.SERVER_ERROR
+                ServerWelcomeRejectReason.SERVER_WELCOME_REJECT_UNSPECIFIED ->
+                    if (msg.server_protocol_version != 0 && msg.server_protocol_version != MoeMusicProtocol.VERSION) {
+                        ServerWelcomeRejectionReason.PROTOCOL_MISMATCH
+                    } else {
+                        ServerWelcomeRejectionReason.UNKNOWN
+                    }
+            },
+            clientProtocolVersion = MoeMusicProtocol.VERSION,
+            serverProtocolVersion = msg.server_protocol_version,
+            detail = msg.failure.ifBlank { null },
+        )
+
+    private fun renderServerWelcomeRejection(rejection: ServerWelcomeRejection): String =
+        Localization.render(user.locale, rejection.toLocalizedText())
 
     private fun anchoredPlaybackPositionMs(
         positionMs: Long,
@@ -888,7 +920,10 @@ class TerminalClientRuntime(
         override fun ensureDirectRequestSessionReady() {
             check(participationRequested) { "MoeMusic terminal session is not initialized." }
             check(serverHandshakeReceived) { "MoeMusic server handshake has not completed yet." }
-            check(serverSessionAccepted) { "MoeMusic server rejected this terminal client session." }
+            check(serverSessionAccepted) {
+                lastServerWelcomeRejection?.let(::renderServerWelcomeRejection)
+                    ?: Localization.render(user.locale, LocalizedText.key("screen.moemusic.unavailable.rejected.body"))
+            }
         }
 
         override fun beginSearchRequest(query: String, sourceId: String, limit: Int, offset: Int): Deferred<SearchResponse>? =
