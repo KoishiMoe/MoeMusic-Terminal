@@ -275,8 +275,7 @@ class TerminalClientRuntime(
     override fun receiveFromServer(packetId: PacketId, payload: ByteArray) {
         try {
             when (packetId) {
-                PacketIds.PLAY_TRACK -> handlePlayTrack(PlayTrack.ADAPTER.decode(payload))
-                PacketIds.PLAYBACK_SNAPSHOT_UPDATE -> handlePlaybackSnapshotUpdate(PlaybackSnapshotUpdate.ADAPTER.decode(payload))
+                PacketIds.PLAYBACK_SNAPSHOT_PUSH -> handlePlaybackSnapshotPush(PlaybackSnapshotPush.ADAPTER.decode(payload))
                 PacketIds.STATE_UPDATE -> handleStateUpdate(StateUpdate.ADAPTER.decode(payload))
                 PacketIds.SYNC_RESPONSE -> handleSyncResponse(SyncResponse.ADAPTER.decode(payload))
                 PacketIds.SERVER_WELCOME -> handleServerWelcome(ServerWelcome.ADAPTER.decode(payload))
@@ -315,8 +314,6 @@ class TerminalClientRuntime(
             stopActivePlayback(fireEvent = true)
             InstancePlaybackLock.release()
             stopPlaybackLockRetry()
-            syncJob?.cancel()
-            syncJob = null
         }
     }
 
@@ -354,22 +351,11 @@ class TerminalClientRuntime(
         playbackRegistrationActive = msg.accepted_state == ClientStateProto.CLIENT_STATE_ACTIVE
         setStatus("Connected (${sourceCatalog?.sources?.size ?: 0} sources)")
         requestQueueRefresh()
+        startSyncLoop()
         if (playbackRegistrationActive) {
-            if (ModConfigManager.config.client.playbackEnabled) {
-                startSyncLoop()
-                val snapshot = msg.initial_playback
-                if (snapshot != null) {
-                    applyPlaybackSnapshot(snapshot, fromSyncState = true)
-                } else {
-                    InstancePlaybackLock.release()
-                    stopActivePlayback(fireEvent = true)
-                }
-            } else {
+            if (!ModConfigManager.config.client.playbackEnabled) {
                 sendClientStateChange(ClientStateProto.CLIENT_STATE_STANDBY)
             }
-        } else {
-            syncJob?.cancel()
-            syncJob = null
         }
     }
 
@@ -491,31 +477,13 @@ class TerminalClientRuntime(
     }
 
     private fun handleSyncResponse(response: SyncResponse) {
-        if (!canHandlePlaybackPackets()) return
+        if (!canHandleSessionPackets()) return
         applyTimeSync(response)
     }
 
-    private fun handlePlayTrack(msg: PlayTrack) {
-        applyPlaybackSnapshot(msg.snapshot ?: return, fromSyncState = false)
-        requestQueueRefresh()
-    }
-
-    private fun handlePlaybackSnapshotUpdate(msg: PlaybackSnapshotUpdate) {
-        if (!participationRequested || !serverSessionAccepted) return
-        msg.time_sync?.let(::applyTimeSync)
-        if (!ModConfigManager.config.client.playbackEnabled) {
-            sendClientStateChange(ClientStateProto.CLIENT_STATE_STANDBY)
-            return
-        }
-        playbackRegistrationActive = true
-        startSyncLoop()
-        val snapshot = msg.snapshot
-        if (snapshot == null) {
-            InstancePlaybackLock.release()
-            stopActivePlayback(fireEvent = true)
-            return
-        }
-        applyPlaybackSnapshot(snapshot, fromSyncState = true)
+    private fun handlePlaybackSnapshotPush(msg: PlaybackSnapshotPush) {
+        val fromSyncState = msg.reason != PlaybackSnapshotPushReason.PLAYBACK_SNAPSHOT_PUSH_REASON_NEW_TRACK
+        applyPlaybackSnapshot(msg.snapshot ?: return, fromSyncState = fromSyncState)
         requestQueueRefresh()
     }
 
@@ -767,16 +735,11 @@ class TerminalClientRuntime(
 
     private fun sendClientStateChange(state: ClientStateProto) {
         if (!participationRequested || !serverSessionAccepted) return
-        if (state == ClientStateProto.CLIENT_STATE_STANDBY) {
-            playbackRegistrationActive = false
-            syncJob?.cancel()
-            syncJob = null
-        }
+        playbackRegistrationActive = state == ClientStateProto.CLIENT_STATE_ACTIVE
         channel.sendToServer(
             PacketIds.CLIENT_STATE_CHANGE,
             ClientStateChange(
                 state = state,
-                client_send_monotonic = System.nanoTime(),
             ).encode(),
         )
     }
@@ -785,7 +748,7 @@ class TerminalClientRuntime(
         if (syncJob?.isActive == true) return
         syncJob = scope.launch {
             while (isActive) {
-                if (canHandlePlaybackPackets()) {
+                if (canHandleSessionPackets()) {
                     channel.sendToServer(
                         PacketIds.SYNC_REQUEST,
                         SyncRequest(client_send_monotonic = System.nanoTime()).encode(),
@@ -856,7 +819,10 @@ class TerminalClientRuntime(
     }
 
     private fun canHandlePlaybackPackets(): Boolean =
-        serverSessionAccepted && playbackRegistrationActive && ModConfigManager.config.client.playbackEnabled
+        canHandleSessionPackets() && playbackRegistrationActive && ModConfigManager.config.client.playbackEnabled
+
+    private fun canHandleSessionPackets(): Boolean =
+        participationRequested && serverSessionAccepted
 
     private fun clearPendingRequests(cause: Throwable) {
         pendingSearchResponses.failAll(cause)
