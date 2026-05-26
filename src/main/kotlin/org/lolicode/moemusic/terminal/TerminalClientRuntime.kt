@@ -5,6 +5,7 @@ import org.lolicode.moemusic.api.LocalizedText
 import org.lolicode.moemusic.api.client.*
 import org.lolicode.moemusic.api.event.UserParticipationState
 import org.lolicode.moemusic.api.model.PlaybackResource
+import org.lolicode.moemusic.api.model.PlaybackState
 import org.lolicode.moemusic.api.model.SelectionEntry
 import org.lolicode.moemusic.api.model.TrackContext
 import org.lolicode.moemusic.api.model.TrackInfo
@@ -315,6 +316,9 @@ class TerminalClientRuntime(
     }
 
     private inner class TerminalPlaybackListener : ClientPlaybackRuntimeListener {
+        private var suppressNextStoppedStatus = false
+        private var hadPlaybackStatus = false
+
         override fun onServerWelcomeAccepted(catalog: SearchSourceCatalog) {
             setStatus("Connected (${catalog.sources.size} sources)")
             requestQueueRefresh()
@@ -414,12 +418,43 @@ class TerminalClientRuntime(
         }
 
         override fun onLocalPlaybackBlocked(message: String) {
+            suppressNextStoppedStatus = true
             setStatus(message)
         }
 
         override fun onInstancePlaybackStandby(message: String?) {
             if (message != null) {
+                suppressNextStoppedStatus = true
                 setStatus("Playback standby: another MoeMusic instance owns the local audio lock")
+            }
+        }
+
+        override fun onPlaybackStateChanged() {
+            val ctx = currentContext
+            when (ctx?.state) {
+                is PlaybackState.Playing -> {
+                    suppressNextStoppedStatus = false
+                    hadPlaybackStatus = true
+                    setStatus("Playing: ${ctx.track.statusTitle()}")
+                }
+
+                is PlaybackState.Paused -> {
+                    suppressNextStoppedStatus = false
+                    hadPlaybackStatus = true
+                    setStatus("Paused: ${ctx.track.statusTitle()}")
+                }
+
+                PlaybackState.Stopped, null -> {
+                    if (suppressNextStoppedStatus) {
+                        suppressNextStoppedStatus = false
+                        hadPlaybackStatus = false
+                        return
+                    }
+                    if (hadPlaybackStatus) {
+                        setStatus("Playback stopped")
+                    }
+                    hadPlaybackStatus = false
+                }
             }
         }
 
@@ -427,6 +462,9 @@ class TerminalClientRuntime(
             requestQueueRefresh()
         }
     }
+
+    private fun TrackInfo.statusTitle(): String =
+        title.ifBlank { id }
 
     private companion object {
         private const val LOCK_RETRY_INTERVAL_MS = 1_000L
