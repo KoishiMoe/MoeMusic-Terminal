@@ -151,6 +151,12 @@ class TerminalClientRuntime(
         private set
 
     @Volatile
+    private var serverSessionAccepted: Boolean = false
+
+    @Volatile
+    private var timeSyncEstablished: Boolean = false
+
+    @Volatile
     private var participationRequested: Boolean = false
 
     @Volatile
@@ -238,7 +244,6 @@ class TerminalClientRuntime(
                 ClientStateProto.CLIENT_STATE_STANDBY
             },
         )
-        startSyncLoop()
     }
 
     fun stop() {
@@ -264,10 +269,10 @@ class TerminalClientRuntime(
         try {
             when (packetId) {
                 PacketIds.PLAY_TRACK -> handlePlayTrack(PlayTrack.ADAPTER.decode(payload))
-                PacketIds.SYNC_STATE -> handleSyncState(SyncState.ADAPTER.decode(payload))
+                PacketIds.PLAYBACK_SNAPSHOT_UPDATE -> handlePlaybackSnapshotUpdate(PlaybackSnapshotUpdate.ADAPTER.decode(payload))
                 PacketIds.STATE_UPDATE -> handleStateUpdate(StateUpdate.ADAPTER.decode(payload))
                 PacketIds.SYNC_RESPONSE -> handleSyncResponse(SyncResponse.ADAPTER.decode(payload))
-                PacketIds.SERVER_HANDSHAKE -> handleServerHandshake(ServerHandshake.ADAPTER.decode(payload))
+                PacketIds.SERVER_WELCOME -> handleServerWelcome(ServerWelcome.ADAPTER.decode(payload))
                 PacketIds.SEARCH_RESPONSE -> handleSearchResponse(SearchResponse.ADAPTER.decode(payload))
                 PacketIds.QUEUE_RESPONSE -> handleQueueResponse(QueueResponse.ADAPTER.decode(payload))
                 PacketIds.TRACK_SUBMIT_RESPONSE -> handleTrackSubmitResponse(TrackSubmitResponse.ADAPTER.decode(payload))
@@ -298,7 +303,6 @@ class TerminalClientRuntime(
         if (active == playbackRegistrationActive) return
         if (active) {
             sendClientStateChange(ClientStateProto.CLIENT_STATE_ACTIVE)
-            startSyncLoop()
         } else {
             sendClientStateChange(ClientStateProto.CLIENT_STATE_STANDBY)
             stopActivePlayback(fireEvent = true)
@@ -309,8 +313,26 @@ class TerminalClientRuntime(
         }
     }
 
-    private fun handleServerHandshake(msg: ServerHandshake) {
+    private fun handleServerWelcome(msg: ServerWelcome) {
+        if (!participationRequested) return
+        msg.initial_time_sync?.let(::applyTimeSync)
         serverHandshakeReceived = true
+        serverSessionAccepted = msg.accepted
+        if (!msg.accepted) {
+            val failure = msg.failure.ifBlank {
+                "MoeMusic server rejected the terminal client handshake (server protocol ${msg.server_protocol_version})."
+            }
+            setStatus(failure)
+            sourceCatalog = null
+            playbackRegistrationActive = false
+            syncJob?.cancel()
+            syncJob = null
+            stopActivePlayback(fireEvent = true)
+            InstancePlaybackLock.release()
+            clearPendingRequests(ClientRequestException(failure))
+            return
+        }
+
         sourceCatalog = SearchSourceCatalog(
             sources = msg.sources.map { source ->
                 SearchSourceInfo(
@@ -321,7 +343,26 @@ class TerminalClientRuntime(
             },
             defaultSourceId = msg.default_source_id,
         )
+        playbackRegistrationActive = msg.accepted_state == ClientStateProto.CLIENT_STATE_ACTIVE
         setStatus("Connected (${sourceCatalog?.sources?.size ?: 0} sources)")
+        requestQueueRefresh()
+        if (playbackRegistrationActive) {
+            if (ModConfigManager.config.client.playbackEnabled) {
+                startSyncLoop()
+                val snapshot = msg.initial_playback
+                if (snapshot != null) {
+                    applyPlaybackSnapshot(snapshot, fromSyncState = true)
+                } else {
+                    InstancePlaybackLock.release()
+                    stopActivePlayback(fireEvent = true)
+                }
+            } else {
+                sendClientStateChange(ClientStateProto.CLIENT_STATE_STANDBY)
+            }
+        } else {
+            syncJob?.cancel()
+            syncJob = null
+        }
     }
 
     private fun handleSearchResponse(msg: SearchResponse) {
@@ -442,59 +483,64 @@ class TerminalClientRuntime(
     }
 
     private fun handleSyncResponse(response: SyncResponse) {
-        serverClockOffset = timeSyncHandler.computeClientOffset(response)
+        if (!canHandlePlaybackPackets()) return
+        applyTimeSync(response)
     }
 
     private fun handlePlayTrack(msg: PlayTrack) {
-        val trackProto = msg.track ?: return
-        val playback = msg.playback?.toApi() ?: return
-        val track = trackProto.toApi().withLyrics(msg.lyric_lrc, msg.secondary_lyric_lrc)
-        startPlayback(track, playback, msg.server_start_monotonic, fromSyncState = false, pausedPositionMs = null)
+        applyPlaybackSnapshot(msg.snapshot ?: return, fromSyncState = false)
         requestQueueRefresh()
     }
 
-    private fun handleSyncState(msg: SyncState) {
-        val trackProto = msg.track ?: return
-        val playback = msg.playback?.toApi() ?: return
-        val track = trackProto.toApi().withLyrics(msg.lyric_lrc, msg.secondary_lyric_lrc)
-        when (msg.state) {
-            PlaybackStateProto.PLAYING ->
-                startPlayback(track, playback, msg.server_start_monotonic, fromSyncState = true, pausedPositionMs = null)
-
-            PlaybackStateProto.PAUSED ->
-                startPlayback(track, playback, msg.server_start_monotonic, fromSyncState = true, pausedPositionMs = msg.pause_position_ms)
-
-            PlaybackStateProto.STOPPED -> {
-                InstancePlaybackLock.release()
-                stopActivePlayback(fireEvent = true)
-            }
+    private fun handlePlaybackSnapshotUpdate(msg: PlaybackSnapshotUpdate) {
+        if (!participationRequested || !serverSessionAccepted) return
+        msg.time_sync?.let(::applyTimeSync)
+        if (!ModConfigManager.config.client.playbackEnabled) {
+            sendClientStateChange(ClientStateProto.CLIENT_STATE_STANDBY)
+            return
         }
+        playbackRegistrationActive = true
+        startSyncLoop()
+        val snapshot = msg.snapshot
+        if (snapshot == null) {
+            InstancePlaybackLock.release()
+            stopActivePlayback(fireEvent = true)
+            return
+        }
+        applyPlaybackSnapshot(snapshot, fromSyncState = true)
+        requestQueueRefresh()
     }
 
     private fun handleStateUpdate(msg: StateUpdate) {
+        if (!canHandlePlaybackPackets()) return
         val ctx = currentContext ?: return
         when (msg.state) {
             PlaybackStateProto.PAUSED -> {
+                val positionMs = normalizeClientPosition(msg.position_ms, ctx.track.durationMs)
                 audioRuntime.pause()
-                currentContext = ctx.copy(state = PlaybackState.Paused(msg.position_ms))
-                CoreEvents.bus.fire(OnClientPlaybackPaused(ctx.track, msg.position_ms))
+                currentContext = ctx.copy(state = PlaybackState.Paused(positionMs))
+                CoreEvents.bus.fire(OnClientPlaybackPaused(ctx.track, positionMs))
             }
 
             PlaybackStateProto.PLAYING -> {
                 val playback = msg.playback?.toApi() ?: ctx.playback
                 val serverNow = currentServerMonotonicNow()
-                val seekMs = if (msg.server_start_monotonic != 0L) {
-                    computeSeekMs(msg.server_start_monotonic, serverNow)
-                } else {
-                    msg.position_ms
-                }
+                val seekMs = anchoredPlaybackPositionMs(
+                    positionMs = msg.position_ms,
+                    anchorServerMonotonic = msg.position_anchor_server_monotonic,
+                    durationMs = ctx.track.durationMs,
+                )
                 if (!ensurePlaybackLock()) return
                 audioRuntime.play(playback, seekMs, ::handleAudioError)
                 val wasPaused = ctx.state is PlaybackState.Paused
                 currentContext = ctx.copy(
                     playback = playback,
                     state = PlaybackState.Playing(seekMs),
-                    serverStartMonotonic = msg.server_start_monotonic.takeIf { it != 0L } ?: ctx.serverStartMonotonic,
+                    serverStartMonotonic = if (msg.position_anchor_server_monotonic != 0L) {
+                        msg.position_anchor_server_monotonic - msg.position_ms.coerceAtLeast(0L) * 1_000_000L
+                    } else {
+                        ctx.serverStartMonotonic
+                    },
                     serverResumeMonotonic = serverNow,
                 )
                 if (wasPaused) {
@@ -511,14 +557,11 @@ class TerminalClientRuntime(
         }
     }
 
-    private fun startPlayback(
-        track: TrackInfo,
-        playback: PlaybackResource,
-        serverStartMonotonic: Long,
-        fromSyncState: Boolean,
-        pausedPositionMs: Long?,
-    ) {
-        if (!playbackRegistrationActive || !ModConfigManager.config.client.playbackEnabled) return
+    private fun applyPlaybackSnapshot(snapshot: PlaybackSnapshot, fromSyncState: Boolean) {
+        if (!canHandlePlaybackPackets()) return
+        val trackProto = snapshot.track ?: return
+        val playback = snapshot.playback?.toApi() ?: return
+        val track = trackProto.toApi().withLyrics(snapshot.lyric_lrc, snapshot.secondary_lyric_lrc)
         if (playback.url.isBlank()) {
             stopActivePlayback(fireEvent = true)
             setStatus("Playback URL is blank")
@@ -532,30 +575,66 @@ class TerminalClientRuntime(
             stopActivePlayback(fireEvent = true)
             return
         }
-        if (!ensurePlaybackLock()) return
-
         val serverNow = currentServerMonotonicNow()
-        val positionMs = pausedPositionMs ?: computeSeekMs(serverStartMonotonic, serverNow)
-        audioRuntime.play(playback, positionMs, ::handleAudioError)
-        if (pausedPositionMs != null) {
-            audioRuntime.pause()
+        when (snapshot.state) {
+            PlaybackStateProto.PLAYING -> {
+                if (!ensurePlaybackLock()) return
+                val positionMs = anchoredPlaybackPositionMs(
+                    positionMs = snapshot.position_ms,
+                    anchorServerMonotonic = snapshot.position_anchor_server_monotonic,
+                    durationMs = allowedTrack.durationMs,
+                )
+                audioRuntime.play(playback, positionMs, ::handleAudioError)
+                currentContext = TrackContext(
+                    track = allowedTrack,
+                    playback = playback,
+                    state = PlaybackState.Playing(positionMs),
+                    serverStartMonotonic = if (snapshot.position_anchor_server_monotonic != 0L) {
+                        snapshot.position_anchor_server_monotonic - snapshot.position_ms.coerceAtLeast(0L) * 1_000_000L
+                    } else {
+                        serverNow - positionMs * 1_000_000L
+                    },
+                    serverResumeMonotonic = serverNow,
+                )
+                CoreEvents.bus.fire(
+                    OnClientPlaybackStarted(
+                        track = allowedTrack,
+                        playback = playback,
+                        positionMs = positionMs,
+                        fromSyncState = fromSyncState,
+                    ),
+                )
+                setStatus("Playing ${allowedTrack.title.ifBlank { allowedTrack.id }}")
+            }
+
+            PlaybackStateProto.PAUSED -> {
+                if (!ensurePlaybackLock()) return
+                val positionMs = normalizeClientPosition(snapshot.position_ms, allowedTrack.durationMs)
+                audioRuntime.play(playback, positionMs, ::handleAudioError)
+                audioRuntime.pause()
+                currentContext = TrackContext(
+                    track = allowedTrack,
+                    playback = playback,
+                    state = PlaybackState.Paused(positionMs),
+                    serverStartMonotonic = serverNow - positionMs * 1_000_000L,
+                    serverResumeMonotonic = serverNow,
+                )
+                CoreEvents.bus.fire(
+                    OnClientPlaybackStarted(
+                        track = allowedTrack,
+                        playback = playback,
+                        positionMs = positionMs,
+                        fromSyncState = fromSyncState,
+                    ),
+                )
+                setStatus("Paused ${allowedTrack.title.ifBlank { allowedTrack.id }}")
+            }
+
+            PlaybackStateProto.STOPPED -> {
+                InstancePlaybackLock.release()
+                stopActivePlayback(fireEvent = true)
+            }
         }
-        currentContext = TrackContext(
-            track = allowedTrack,
-            playback = playback,
-            state = if (pausedPositionMs == null) PlaybackState.Playing(positionMs) else PlaybackState.Paused(positionMs),
-            serverStartMonotonic = serverStartMonotonic,
-            serverResumeMonotonic = if (pausedPositionMs == null) serverNow else serverStartMonotonic,
-        )
-        CoreEvents.bus.fire(
-            OnClientPlaybackStarted(
-                track = allowedTrack,
-                playback = playback,
-                positionMs = positionMs,
-                fromSyncState = fromSyncState,
-            ),
-        )
-        setStatus("Playing ${allowedTrack.title.ifBlank { allowedTrack.id }}")
     }
 
     private fun applyClientMediaPolicy(track: TrackInfo, url: String): Boolean =
@@ -617,7 +696,7 @@ class TerminalClientRuntime(
         playbackLockRetryJob = scope.launch {
             while (isActive) {
                 delay(LOCK_RETRY_INTERVAL_MS.milliseconds)
-                if (!participationRequested || !serverHandshakeReceived) return@launch
+                if (!participationRequested || !serverSessionAccepted) return@launch
                 if (playbackRegistrationActive) return@launch
                 if (!ModConfigManager.config.client.playbackEnabled) return@launch
 
@@ -627,7 +706,6 @@ class TerminalClientRuntime(
                     setStatus("Playback lock available; resuming local audio")
                     playbackLockRetryJob = null
                     sendClientStateChange(ClientStateProto.CLIENT_STATE_ACTIVE)
-                    startSyncLoop()
                     return@launch
                 }
             }
@@ -653,7 +731,7 @@ class TerminalClientRuntime(
     }
 
     private fun requestQueueRefresh() {
-        if (!serverHandshakeReceived) return
+        if (!serverSessionAccepted) return
         beginCorrelatedRequest(pendingQueueResponses, PacketIds.QUEUE_REQUEST) { requestId ->
             QueueRequest(request_id = requestId).encode()
         }
@@ -661,7 +739,11 @@ class TerminalClientRuntime(
 
     private fun sendHandshake(locale: String, initialState: ClientStateProto) {
         participationRequested = true
-        playbackRegistrationActive = initialState == ClientStateProto.CLIENT_STATE_ACTIVE
+        playbackRegistrationActive = false
+        serverHandshakeReceived = false
+        serverSessionAccepted = false
+        sourceCatalog = null
+        val now = System.nanoTime()
         channel.sendToServer(
             PacketIds.CLIENT_HANDSHAKE,
             ClientHandshake(
@@ -669,22 +751,32 @@ class TerminalClientRuntime(
                 mod_version = "terminal-dev",
                 protocol_version = org.lolicode.moemusic.core.protocol.MoeMusicProtocol.VERSION,
                 initial_state = initialState,
+                client_send_monotonic = now,
             ).encode(),
         )
     }
 
     private fun sendClientStateChange(state: ClientStateProto) {
-        if (!participationRequested) return
-        playbackRegistrationActive = state == ClientStateProto.CLIENT_STATE_ACTIVE
-        channel.sendToServer(PacketIds.CLIENT_STATE_CHANGE, ClientStateChange(state = state).encode())
+        if (!participationRequested || !serverSessionAccepted) return
+        if (state == ClientStateProto.CLIENT_STATE_STANDBY) {
+            playbackRegistrationActive = false
+            syncJob?.cancel()
+            syncJob = null
+        }
+        channel.sendToServer(
+            PacketIds.CLIENT_STATE_CHANGE,
+            ClientStateChange(
+                state = state,
+                client_send_monotonic = System.nanoTime(),
+            ).encode(),
+        )
     }
 
     private fun startSyncLoop() {
         if (syncJob?.isActive == true) return
         syncJob = scope.launch {
-            delay(500.milliseconds)
             while (isActive) {
-                if (playbackRegistrationActive) {
+                if (canHandlePlaybackPackets()) {
                     channel.sendToServer(
                         PacketIds.SYNC_REQUEST,
                         SyncRequest(client_send_monotonic = System.nanoTime()).encode(),
@@ -696,6 +788,45 @@ class TerminalClientRuntime(
     }
 
     private fun clearConnectionState(cause: Throwable) {
+        clearPendingRequests(cause)
+        participationRequested = false
+        playbackRegistrationActive = false
+        serverHandshakeReceived = false
+        serverSessionAccepted = false
+        timeSyncEstablished = false
+        serverClockOffset = 0L
+        sourceCatalog = null
+    }
+
+    private fun currentServerMonotonicNow(): Long = System.nanoTime() + serverClockOffset
+
+    private fun applyTimeSync(response: SyncResponse) {
+        serverClockOffset = timeSyncHandler.computeClientOffset(response)
+        timeSyncEstablished = true
+    }
+
+    private fun anchoredPlaybackPositionMs(
+        positionMs: Long,
+        anchorServerMonotonic: Long,
+        durationMs: Long,
+    ): Long {
+        val basePositionMs = positionMs.coerceAtLeast(0L)
+        if (!timeSyncEstablished || anchorServerMonotonic == 0L) {
+            return normalizeClientPosition(basePositionMs, durationMs)
+        }
+        val elapsedMs = (currentServerMonotonicNow() - anchorServerMonotonic) / 1_000_000L
+        return normalizeClientPosition(basePositionMs + elapsedMs, durationMs)
+    }
+
+    private fun normalizeClientPosition(positionMs: Long, durationMs: Long): Long {
+        val nonNegative = positionMs.coerceAtLeast(0L)
+        return if (durationMs > 0L) nonNegative.coerceAtMost(durationMs) else nonNegative
+    }
+
+    private fun canHandlePlaybackPackets(): Boolean =
+        serverSessionAccepted && playbackRegistrationActive && ModConfigManager.config.client.playbackEnabled
+
+    private fun clearPendingRequests(cause: Throwable) {
         pendingSearchResponses.failAll(cause)
         pendingQueueResponses.failAll(cause)
         pendingTrackSubmitResponses.failAll(cause)
@@ -704,16 +835,7 @@ class TerminalClientRuntime(
         pendingQueueRemoveResponses.failAll(cause)
         pendingPlaybackControlResponses.failAll(cause)
         pendingContentFilterActionResponses.failAll(cause)
-        participationRequested = false
-        playbackRegistrationActive = false
-        serverHandshakeReceived = false
-        sourceCatalog = null
     }
-
-    private fun currentServerMonotonicNow(): Long = System.nanoTime() + serverClockOffset
-
-    private fun computeSeekMs(serverStartMonotonic: Long, serverNow: Long = currentServerMonotonicNow()): Long =
-        ((serverNow - serverStartMonotonic) / 1_000_000L).coerceAtLeast(0L)
 
     private fun TrackInfo.withLyrics(primary: String, secondary: String): TrackInfo = copy(
         lyricLrc = primary.ifEmpty { null },
@@ -735,7 +857,7 @@ class TerminalClientRuntime(
         packetId: PacketId,
         payloadFactory: (Long) -> ByteArray,
     ): Deferred<T>? {
-        if (!participationRequested) return null
+        if (!participationRequested || !serverSessionAccepted) return null
         val requestId = nextRequestId()
         val deferred = registry.register(requestId)
         channel.sendToServer(packetId, payloadFactory(requestId))
@@ -766,6 +888,7 @@ class TerminalClientRuntime(
         override fun ensureDirectRequestSessionReady() {
             check(participationRequested) { "MoeMusic terminal session is not initialized." }
             check(serverHandshakeReceived) { "MoeMusic server handshake has not completed yet." }
+            check(serverSessionAccepted) { "MoeMusic server rejected this terminal client session." }
         }
 
         override fun beginSearchRequest(query: String, sourceId: String, limit: Int, offset: Int): Deferred<SearchResponse>? =
