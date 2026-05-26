@@ -43,37 +43,41 @@ class TerminalApplicationTest {
     @Test
     fun `search responses append later pages`() = runBlocking {
         val configDir = createTempDirectory("moemusic-terminal-test-")
-        val runtime = TerminalClientRuntime(configDir, TerminalUser(), this)
 
-        runtime.receiveFromServer(
-            PacketIds.SEARCH_RESPONSE,
-            SearchResponse(
-                request_id = 1,
-                query = "demo",
-                source_id = "http",
-                offset = 0,
-                total = 3,
-                has_more = true,
-                entries = listOf(searchEntry("a"), searchEntry("b")),
-            ).encode(),
-        )
-        runtime.receiveFromServer(
-            PacketIds.SEARCH_RESPONSE,
-            SearchResponse(
-                request_id = 2,
-                query = "demo",
-                source_id = "http",
-                offset = 2,
-                total = 3,
-                has_more = false,
-                entries = listOf(searchEntry("c")),
-            ).encode(),
-        )
+        TerminalApplication(configDir).use { app ->
+            app.start()
+            val runtime = app.client
 
-        assertEquals(listOf("a", "b", "c"), runtime.searchResults.map { it.selectionId })
-        assertEquals(3, runtime.searchLoadedCount)
-        assertEquals(3, runtime.searchTotal)
-        assertTrue(!runtime.searchHasMore)
+            runtime.receiveFromServer(
+                PacketIds.SEARCH_RESPONSE,
+                SearchResponse(
+                    request_id = 1,
+                    query = "demo",
+                    source_id = "http",
+                    offset = 0,
+                    total = 3,
+                    has_more = true,
+                    entries = listOf(searchEntry("a"), searchEntry("b")),
+                ).encode(),
+            )
+            runtime.receiveFromServer(
+                PacketIds.SEARCH_RESPONSE,
+                SearchResponse(
+                    request_id = 2,
+                    query = "demo",
+                    source_id = "http",
+                    offset = 2,
+                    total = 3,
+                    has_more = false,
+                    entries = listOf(searchEntry("c")),
+                ).encode(),
+            )
+
+            assertEquals(listOf("a", "b", "c"), runtime.searchResults.map { it.selectionId })
+            assertEquals(3, runtime.searchLoadedCount)
+            assertEquals(3, runtime.searchTotal)
+            assertTrue(!runtime.searchHasMore)
+        }
     }
 
     private fun searchEntry(id: String): SelectionEntryProto =
