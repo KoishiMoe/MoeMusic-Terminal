@@ -1,11 +1,12 @@
 package org.lolicode.moemusic.terminal
 
-import java.nio.file.Path
-import java.nio.file.Paths
 import java.io.FileOutputStream
 import java.io.PrintStream
-import kotlin.system.exitProcess
+import java.nio.file.Path
+import java.nio.file.Paths
 import kotlin.io.path.createDirectories
+import kotlin.system.exitProcess
+import org.lolicode.moemusic.core.platform.PlatformDirectories
 
 fun main(args: Array<String>) {
     val options = TerminalOptions.parse(args) ?: return
@@ -193,17 +194,27 @@ fun defaultConfigDir(
     return when {
         "win" in normalizedOs -> {
             val base = env["APPDATA"].orEmpty().ifBlank { env["LOCALAPPDATA"].orEmpty() }
-            Paths.get(base.ifBlank { userHome }).resolve("MoeMusicTerminal")
+            val basePath = if (base.isNotBlank()) {
+                Paths.get(base)
+            } else {
+                PlatformDirectories.homeDirectory(env, userHome, preferWindowsHome = true) ?: Paths.get("")
+            }
+            basePath.resolve("MoeMusicTerminal")
         }
 
         "mac" in normalizedOs || "darwin" in normalizedOs ->
-            Paths.get(userHome).resolve("Library").resolve("Application Support").resolve("MoeMusicTerminal")
+            (PlatformDirectories.homeDirectory(env, userHome) ?: Paths.get(""))
+                .resolve("Library")
+                .resolve("Application Support")
+                .resolve("MoeMusicTerminal")
 
         else -> {
-            val base = env["XDG_CONFIG_HOME"].orEmpty().ifBlank {
-                Paths.get(userHome).resolve(".config").toString()
-            }
-            Paths.get(base).resolve("moemusic-terminal")
+            val basePath = env["XDG_CONFIG_HOME"].orEmpty().takeIf { it.isNotBlank() }?.let(Paths::get)
+                ?: run {
+                    val home = PlatformDirectories.homeDirectory(env, userHome)
+                    home?.resolve(".config") ?: Paths.get(".config")
+                }
+            basePath.resolve("moemusic-terminal")
         }
     }.toAbsolutePath().normalize()
 }
