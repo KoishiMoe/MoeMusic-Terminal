@@ -3,6 +3,7 @@ package org.lolicode.moemusic.terminal
 import kotlinx.coroutines.*
 import org.lolicode.moemusic.api.LocalizedText
 import org.lolicode.moemusic.api.client.*
+import org.lolicode.moemusic.api.debugString
 import org.lolicode.moemusic.api.event.*
 import org.lolicode.moemusic.api.model.*
 import org.lolicode.moemusic.api.service.FilterVerdict
@@ -242,6 +243,7 @@ class TerminalClientRuntime(
     }
 
     fun start() {
+        logger.info("Starting MoeMusic terminal client for user={} locale={}", user.displayName, user.locale)
         CoreEvents.bus.fire(OnClientConnected)
         sendHandshake(
             locale = user.locale,
@@ -254,6 +256,7 @@ class TerminalClientRuntime(
     }
 
     fun stop() {
+        logger.info("Stopping MoeMusic terminal client for user={}", user.displayName)
         syncJob?.cancel()
         syncJob = null
         stopPlaybackLockRetry()
@@ -307,6 +310,10 @@ class TerminalClientRuntime(
     fun syncParticipationWithCurrentConfig() {
         val active = ModConfigManager.config.client.playbackEnabled
         if (active == playbackRegistrationActive) return
+        logger.info(
+            "Terminal playback participation config changed: desired={}",
+            if (active) ClientStateProto.CLIENT_STATE_ACTIVE else ClientStateProto.CLIENT_STATE_STANDBY,
+        )
         if (active) {
             sendClientStateChange(ClientStateProto.CLIENT_STATE_ACTIVE)
         } else {
@@ -318,7 +325,10 @@ class TerminalClientRuntime(
     }
 
     private fun handleServerWelcome(msg: ServerWelcome) {
-        if (!participationRequested) return
+        if (!participationRequested) {
+            logger.warn("Ignoring ServerWelcome because no terminal client session was requested.")
+            return
+        }
         msg.initial_time_sync?.let(::applyTimeSync)
         serverHandshakeReceived = true
         serverSessionAccepted = msg.accepted
@@ -326,6 +336,13 @@ class TerminalClientRuntime(
             val rejection = serverWelcomeRejection(msg)
             lastServerWelcomeRejection = rejection
             val failure = renderServerWelcomeRejection(rejection)
+            logger.warn(
+                "Terminal server handshake rejected: reason={} clientProtocol={} serverProtocol={} detail='{}'",
+                rejection.reason,
+                rejection.clientProtocolVersion,
+                rejection.serverProtocolVersion,
+                rejection.detail.orEmpty(),
+            )
             setStatus(failure)
             sourceCatalog = null
             playbackRegistrationActive = false
@@ -349,6 +366,14 @@ class TerminalClientRuntime(
             defaultSourceId = msg.default_source_id,
         )
         playbackRegistrationActive = msg.accepted_state == ClientStateProto.CLIENT_STATE_ACTIVE
+        logger.info(
+            "Terminal server handshake accepted (sources={}, defaultSource='{}', acceptedState={}, active={}, serverProtocol={})",
+            sourceCatalog?.sources?.size ?: 0,
+            sourceCatalog?.defaultSourceId.orEmpty(),
+            msg.accepted_state,
+            playbackRegistrationActive,
+            msg.server_protocol_version,
+        )
         setStatus("Connected (${sourceCatalog?.sources?.size ?: 0} sources)")
         requestQueueRefresh()
         startSyncLoop()
@@ -477,22 +502,62 @@ class TerminalClientRuntime(
     }
 
     private fun handleSyncResponse(response: SyncResponse) {
-        if (!canHandleSessionPackets()) return
+        if (!canHandleSessionPackets()) {
+            logIgnoredSessionPacket("SyncResponse", debugOnly = true)
+            return
+        }
         applyTimeSync(response)
+        logger.debug(
+            "Terminal clock offset updated: {} ns (clientSend={} serverRecv={} serverSend={})",
+            serverClockOffset,
+            response.client_send_monotonic,
+            response.server_recv_monotonic,
+            response.server_send_monotonic,
+        )
     }
 
     private fun handlePlaybackSnapshotPush(msg: PlaybackSnapshotPush) {
+        val snapshot = msg.snapshot ?: run {
+            logger.warn("Ignoring terminal PlaybackSnapshotPush without a snapshot (reason={}).", msg.reason)
+            return
+        }
+        logger.debug(
+            "Terminal PlaybackSnapshotPush received: reason={} state={} source={} id={} title='{}'",
+            msg.reason,
+            snapshot.state,
+            snapshot.track?.source_id.orEmpty(),
+            snapshot.track?.id.orEmpty(),
+            snapshot.track?.title.orEmpty(),
+        )
+        if (!canHandlePlaybackPackets()) {
+            logIgnoredPlaybackPacket("PlaybackSnapshotPush", "reason=${msg.reason} state=${snapshot.state}")
+            return
+        }
         val fromSyncState = msg.reason != PlaybackSnapshotPushReason.PLAYBACK_SNAPSHOT_PUSH_REASON_NEW_TRACK
-        applyPlaybackSnapshot(msg.snapshot ?: return, fromSyncState = fromSyncState)
+        applyPlaybackSnapshot(snapshot, fromSyncState = fromSyncState)
         requestQueueRefresh()
     }
 
     private fun handleStateUpdate(msg: StateUpdate) {
-        if (!canHandlePlaybackPackets()) return
-        val ctx = currentContext ?: return
+        if (!canHandlePlaybackPackets()) {
+            logIgnoredPlaybackPacket("StateUpdate", "state=${msg.state}")
+            return
+        }
+        val ctx = currentContext ?: run {
+            logger.warn("Ignoring terminal StateUpdate {} because no playback context is loaded.", msg.state)
+            return
+        }
         when (msg.state) {
             PlaybackStateProto.PAUSED -> {
                 val positionMs = normalizeClientPosition(msg.position_ms, ctx.track.durationMs)
+                logInvalidServerPosition("Terminal StateUpdate PAUSED", msg.position_ms, positionMs, ctx.track)
+                logger.info(
+                    "Terminal playback paused by server: source={} id={} title='{}' positionMs={}",
+                    ctx.track.sourceId.orEmpty(),
+                    ctx.track.id,
+                    ctx.track.title,
+                    positionMs,
+                )
                 audioRuntime.pause()
                 currentContext = ctx.copy(state = PlaybackState.Paused(positionMs))
                 CoreEvents.bus.fire(OnClientPlaybackPaused(ctx.track, positionMs))
@@ -507,8 +572,25 @@ class TerminalClientRuntime(
                     durationMs = ctx.track.durationMs,
                 )
                 if (!ensurePlaybackLock()) return
-                audioRuntime.play(playback, seekMs, ::handleAudioError)
                 val wasPaused = ctx.state is PlaybackState.Paused
+                logInvalidServerPosition("Terminal StateUpdate PLAYING", msg.position_ms, seekMs, ctx.track)
+                logger.info(
+                    "Terminal playback {} by server: source={} id={} title='{}' positionMs={}",
+                    if (wasPaused) "resumed" else "seeked",
+                    ctx.track.sourceId.orEmpty(),
+                    ctx.track.id,
+                    ctx.track.title,
+                    seekMs,
+                )
+                if (msg.playback != null) {
+                    logger.debug(
+                        "Terminal StateUpdate playback resource for '{}' url='{}' headers={}",
+                        ctx.track.title,
+                        playback.url,
+                        playback.headers.keys,
+                    )
+                }
+                audioRuntime.play(playback, seekMs, ::handleAudioError)
                 currentContext = ctx.copy(
                     playback = playback,
                     state = PlaybackState.Playing(seekMs),
@@ -527,6 +609,12 @@ class TerminalClientRuntime(
             }
 
             PlaybackStateProto.STOPPED -> {
+                logger.info(
+                    "Terminal playback stopped by server: source={} id={} title='{}'",
+                    ctx.track.sourceId.orEmpty(),
+                    ctx.track.id,
+                    ctx.track.title,
+                )
                 InstancePlaybackLock.release()
                 stopActivePlayback(fireEvent = true)
             }
@@ -534,11 +622,21 @@ class TerminalClientRuntime(
     }
 
     private fun applyPlaybackSnapshot(snapshot: PlaybackSnapshot, fromSyncState: Boolean) {
-        if (!canHandlePlaybackPackets()) return
-        val trackProto = snapshot.track ?: return
-        val playback = snapshot.playback?.toApi() ?: return
+        if (!canHandlePlaybackPackets()) {
+            logIgnoredPlaybackPacket("PlaybackSnapshot", "state=${snapshot.state}")
+            return
+        }
+        val trackProto = snapshot.track ?: run {
+            logger.warn("Ignoring terminal playback snapshot without track metadata (state={}).", snapshot.state)
+            return
+        }
+        val playback = snapshot.playback?.toApi() ?: run {
+            logger.error("Terminal playback snapshot for '{}' is missing playback details; refusing to start audio.", trackProto.title)
+            return
+        }
         val track = trackProto.toApi().withLyrics(snapshot.lyric_lrc, snapshot.secondary_lyric_lrc)
         if (playback.url.isBlank()) {
+            logger.error("Terminal playback snapshot for '{}' is missing a playable URL; refusing to start audio.", track.title)
             stopActivePlayback(fireEvent = true)
             setStatus("Playback URL is blank")
             return
@@ -559,6 +657,21 @@ class TerminalClientRuntime(
                     positionMs = snapshot.position_ms,
                     anchorServerMonotonic = snapshot.position_anchor_server_monotonic,
                     durationMs = allowedTrack.durationMs,
+                )
+                logInvalidServerPosition("Terminal PlaybackSnapshot PLAYING", snapshot.position_ms, positionMs, allowedTrack)
+                logger.info(
+                    "Terminal playback started from snapshot: source={} id={} title='{}' positionMs={} fromSyncState={}",
+                    allowedTrack.sourceId.orEmpty(),
+                    allowedTrack.id,
+                    allowedTrack.title,
+                    positionMs,
+                    fromSyncState,
+                )
+                logger.debug(
+                    "Terminal playback snapshot resource for '{}' url='{}' headers={}",
+                    allowedTrack.title,
+                    playback.url,
+                    playback.headers.keys,
                 )
                 audioRuntime.play(playback, positionMs, ::handleAudioError)
                 currentContext = TrackContext(
@@ -586,6 +699,21 @@ class TerminalClientRuntime(
             PlaybackStateProto.PAUSED -> {
                 if (!ensurePlaybackLock()) return
                 val positionMs = normalizeClientPosition(snapshot.position_ms, allowedTrack.durationMs)
+                logInvalidServerPosition("Terminal PlaybackSnapshot PAUSED", snapshot.position_ms, positionMs, allowedTrack)
+                logger.info(
+                    "Terminal playback loaded paused snapshot: source={} id={} title='{}' positionMs={} fromSyncState={}",
+                    allowedTrack.sourceId.orEmpty(),
+                    allowedTrack.id,
+                    allowedTrack.title,
+                    positionMs,
+                    fromSyncState,
+                )
+                logger.debug(
+                    "Terminal paused playback snapshot resource for '{}' url='{}' headers={}",
+                    allowedTrack.title,
+                    playback.url,
+                    playback.headers.keys,
+                )
                 audioRuntime.play(playback, positionMs, ::handleAudioError)
                 audioRuntime.pause()
                 currentContext = TrackContext(
@@ -607,6 +735,7 @@ class TerminalClientRuntime(
             }
 
             PlaybackStateProto.STOPPED -> {
+                logger.info("Received stopped terminal playback snapshot; clearing local playback context.")
                 InstancePlaybackLock.release()
                 stopActivePlayback(fireEvent = true)
             }
@@ -617,6 +746,7 @@ class TerminalClientRuntime(
         when (val verdict = ClientMediaFirewall.evaluate(url)) {
             MediaUrlPolicyResult.Allow -> true
             is MediaUrlPolicyResult.Reject -> {
+                logger.info("Terminal track '{}' blocked by local media policy: {}", track.title, verdict.reason.debugString())
                 setStatus(
                     Localization.render(
                         user.locale,
@@ -634,6 +764,7 @@ class TerminalClientRuntime(
     private fun applyLocalContentFilter(track: TrackInfo): TrackInfo? {
         if (!ContentFilterRuntime.clientFilterEnabled()) return track
         val reason = ContentFilterRuntime.trackBlockReason(track) ?: return track
+        logger.info("Terminal track '{}' blocked by local content filter: {}", track.title, reason.debugString())
         setStatus(
             Localization.render(
                 user.locale,
@@ -661,6 +792,7 @@ class TerminalClientRuntime(
     }
 
     private fun enterPlaybackLockStandby() {
+        logger.info("Terminal local playback lock unavailable; requesting STANDBY MoeMusic participation.")
         setStatus("Playback standby: another MoeMusic instance owns the local audio lock")
         sendClientStateChange(ClientStateProto.CLIENT_STATE_STANDBY)
         stopActivePlayback(fireEvent = true)
@@ -679,6 +811,7 @@ class TerminalClientRuntime(
                 val lockAvailable = !ModConfigManager.config.client.globalInstancePlaybackLock ||
                     InstancePlaybackLock.probeAvailable()
                 if (lockAvailable) {
+                    logger.info("Terminal playback lock became available; requesting ACTIVE MoeMusic participation.")
                     setStatus("Playback lock available; resuming local audio")
                     playbackLockRetryJob = null
                     sendClientStateChange(ClientStateProto.CLIENT_STATE_ACTIVE)
@@ -702,12 +835,46 @@ class TerminalClientRuntime(
         }
     }
 
+    private fun logInvalidPlaybackControl(action: PlaybackControlAction, positionMs: Long) {
+        if (action != PlaybackControlAction.SEEK) return
+        val durationMs = currentContext?.track?.durationMs ?: 0L
+        val invalid = positionMs < 0L || (durationMs > 0L && positionMs > durationMs)
+        if (invalid) {
+            logger.warn(
+                "Sending terminal SEEK with out-of-range position: requestedMs={} durationMs={}",
+                positionMs,
+                durationMs,
+            )
+        }
+    }
+
+    private fun logInvalidServerPosition(origin: String, requestedMs: Long, normalizedMs: Long, track: TrackInfo) {
+        val durationMs = track.durationMs
+        val invalid = requestedMs < 0L || (durationMs > 0L && requestedMs > durationMs)
+        if (invalid) {
+            logger.warn(
+                "{} carried an out-of-range playback position: requestedMs={} normalizedMs={} durationMs={} source={} id={} title='{}'",
+                origin,
+                requestedMs,
+                normalizedMs,
+                durationMs,
+                track.sourceId.orEmpty(),
+                track.id,
+                track.title,
+            )
+        }
+    }
+
     private fun handleAudioError(message: String) {
+        logger.error("Terminal audio error: {}", message)
         setStatus("Audio error: $message")
     }
 
     private fun requestQueueRefresh() {
-        if (!serverSessionAccepted) return
+        if (!serverSessionAccepted) {
+            logger.debug("Skipping terminal queue refresh before server handshake acceptance.")
+            return
+        }
         beginCorrelatedRequest(pendingQueueResponses, PacketIds.QUEUE_REQUEST) { requestId ->
             QueueRequest(request_id = requestId).encode()
         }
@@ -731,10 +898,20 @@ class TerminalClientRuntime(
                 client_send_monotonic = now,
             ).encode(),
         )
+        logger.info(
+            "Terminal client handshake sent (locale={}, initialState={}, protocol={})",
+            locale,
+            initialState,
+            MoeMusicProtocol.VERSION,
+        )
     }
 
     private fun sendClientStateChange(state: ClientStateProto) {
-        if (!participationRequested || !serverSessionAccepted) return
+        val blockedReason = sessionPacketBlockReason()
+        if (blockedReason != null) {
+            logger.warn("Cannot send terminal participation change {}: {}", state, blockedReason)
+            return
+        }
         playbackRegistrationActive = state == ClientStateProto.CLIENT_STATE_ACTIVE
         channel.sendToServer(
             PacketIds.CLIENT_STATE_CHANGE,
@@ -742,6 +919,7 @@ class TerminalClientRuntime(
                 state = state,
             ).encode(),
         )
+        logger.info("Terminal participation change sent: {}", state)
     }
 
     private fun startSyncLoop() {
@@ -824,6 +1002,36 @@ class TerminalClientRuntime(
     private fun canHandleSessionPackets(): Boolean =
         participationRequested && serverSessionAccepted
 
+    private fun sessionPacketBlockReason(): String? = when {
+        !participationRequested -> "client session has not been requested"
+        !serverHandshakeReceived -> "server handshake has not completed"
+        !serverSessionAccepted -> lastServerWelcomeRejection?.let(::renderServerWelcomeRejection)
+            ?: "server handshake was rejected"
+        else -> null
+    }
+
+    private fun playbackPacketBlockReason(): String? {
+        sessionPacketBlockReason()?.let { return it }
+        if (!playbackRegistrationActive) return "client is in standby"
+        if (!ModConfigManager.config.client.playbackEnabled) return "playback is disabled in client config"
+        return null
+    }
+
+    private fun logIgnoredSessionPacket(packetName: String, debugOnly: Boolean = false) {
+        val reason = sessionPacketBlockReason() ?: return
+        if (debugOnly) {
+            logger.debug("Ignoring terminal {}: {}", packetName, reason)
+        } else {
+            logger.warn("Ignoring terminal {}: {}", packetName, reason)
+        }
+    }
+
+    private fun logIgnoredPlaybackPacket(packetName: String, detail: String = "") {
+        val reason = playbackPacketBlockReason() ?: return
+        val detailSuffix = if (detail.isBlank()) "" else " ($detail)"
+        logger.warn("Ignoring terminal {}{}: {}", packetName, detailSuffix, reason)
+    }
+
     private fun clearPendingRequests(cause: Throwable) {
         pendingSearchResponses.failAll(cause)
         pendingQueueResponses.failAll(cause)
@@ -855,7 +1063,10 @@ class TerminalClientRuntime(
         packetId: PacketId,
         payloadFactory: (Long) -> ByteArray,
     ): Deferred<T>? {
-        if (!participationRequested || !serverSessionAccepted) return null
+        sessionPacketBlockReason()?.let { reason ->
+            logger.warn("Cannot send terminal MoeMusic request {}: {}", packetId, reason)
+            return null
+        }
         val requestId = nextRequestId()
         val deferred = registry.register(requestId)
         channel.sendToServer(packetId, payloadFactory(requestId))
@@ -948,10 +1159,12 @@ class TerminalClientRuntime(
         override fun beginPlaybackControlRequest(
             action: PlaybackControlAction,
             positionMs: Long,
-        ): Deferred<PlaybackControlResponse>? =
-            beginCorrelatedRequest(pendingPlaybackControlResponses, PacketIds.PLAYBACK_CONTROL_REQUEST) { requestId ->
+        ): Deferred<PlaybackControlResponse>? {
+            logInvalidPlaybackControl(action, positionMs)
+            return beginCorrelatedRequest(pendingPlaybackControlResponses, PacketIds.PLAYBACK_CONTROL_REQUEST) { requestId ->
                 PlaybackControlRequest(action = action, position_ms = positionMs, request_id = requestId).encode()
             }
+        }
 
         override fun beginContentFilterTrackActionRequest(
             sourceId: String,
