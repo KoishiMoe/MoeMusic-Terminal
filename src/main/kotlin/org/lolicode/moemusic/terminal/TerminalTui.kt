@@ -1499,6 +1499,7 @@ class TerminalTui(
             is PlaybackState.Playing -> "playing"
             is PlaybackState.Paused -> "paused"
             PlaybackState.Stopped, null -> "stopped"
+            else -> "unknown"
         }
 
     private fun helpLines(width: Int): List<String> {
