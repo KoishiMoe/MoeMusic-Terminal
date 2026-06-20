@@ -197,6 +197,7 @@ class TerminalClientRuntime(
     fun reloadClientConfig() {
         ContentFilterRuntime.applyConfig(ModConfigManager.config)
         volumeController.setConfiguredVolumePercent(ModConfigManager.config.client.volume)
+        runtime.refreshTrackNormalization()
     }
 
     fun setStatus(message: String) {
@@ -305,6 +306,10 @@ class TerminalClientRuntime(
 
         override fun stop() {
             audioRuntime.stop()
+        }
+
+        override fun setNormalizationGain(gain: Float) {
+            audioRuntime.setNormalizationGain(gain)
         }
 
         override fun currentPositionMs(): Long =
