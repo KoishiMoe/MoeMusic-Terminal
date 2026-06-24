@@ -251,11 +251,6 @@ class TerminalClientRuntime(
         return tracks.filter { ContentFilterRuntime.trackFilterVerdict(it) is FilterVerdict.Allow }
     }
 
-    private fun handleAudioError(message: String) {
-        logger.error("Terminal audio error: {}", message)
-        setStatus("Audio error: $message")
-    }
-
     private inner class TerminalPlaybackPlatform : ClientPlaybackPlatform {
         override val name: String = "Terminal"
         override val clientModVersion: String = "terminal-dev"
@@ -290,14 +285,23 @@ class TerminalClientRuntime(
             setStatus(message)
         }
 
+        override fun showLocalPlaybackFailed(title: LocalizedText, message: String) {
+            setStatus(message)
+        }
+
+        override fun onLocalPlaybackFailureFinal(track: TrackInfo, message: String) {
+            setStatus("$message Skipping...")
+            runtime.sendPlaybackControl(PlaybackControlAction.SKIP)
+        }
+
         override fun showInstanceLockStandby(message: String) {
             setStatus("Playback standby: another MoeMusic instance owns the local audio lock")
         }
     }
 
     private inner class TerminalAudioAdapter : ClientPlaybackAudioAdapter {
-        override fun play(playback: PlaybackResource, seekMs: Long) {
-            audioRuntime.play(playback, seekMs, ::handleAudioError)
+        override fun play(playback: PlaybackResource, seekMs: Long, onError: (String) -> Unit) {
+            audioRuntime.play(playback, seekMs, onError)
         }
 
         override fun pause() {
@@ -423,6 +427,19 @@ class TerminalClientRuntime(
         }
 
         override fun onLocalPlaybackBlocked(message: String) {
+            suppressNextStoppedStatus = true
+            setStatus(message)
+        }
+
+        override fun onLocalPlaybackRetrying(message: String) {
+            setStatus(message)
+        }
+
+        override fun onLocalPlaybackRecovered(track: TrackInfo) {
+            setStatus("Playing: ${track.statusTitle()}")
+        }
+
+        override fun onLocalPlaybackFailed(message: String) {
             suppressNextStoppedStatus = true
             setStatus(message)
         }
