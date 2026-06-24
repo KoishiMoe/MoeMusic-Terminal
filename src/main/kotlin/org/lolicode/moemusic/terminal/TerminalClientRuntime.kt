@@ -10,6 +10,7 @@ import org.lolicode.moemusic.api.model.SelectionEntry
 import org.lolicode.moemusic.api.model.TrackContext
 import org.lolicode.moemusic.api.model.TrackInfo
 import org.lolicode.moemusic.api.service.FilterVerdict
+import org.lolicode.moemusic.clientcore.audio.ClientAudioFailure
 import org.lolicode.moemusic.clientcore.audio.ClientAudioPlayerRuntime
 import org.lolicode.moemusic.clientcore.audio.LavaPlayerTrackLoader
 import org.lolicode.moemusic.clientcore.audio.PcmRingBuffer
@@ -300,7 +301,7 @@ class TerminalClientRuntime(
     }
 
     private inner class TerminalAudioAdapter : ClientPlaybackAudioAdapter {
-        override fun play(playback: PlaybackResource, seekMs: Long, onError: (String) -> Unit) {
+        override fun play(playback: PlaybackResource, seekMs: Long, onError: (ClientAudioFailure) -> Unit) {
             audioRuntime.play(playback, seekMs, onError)
         }
 
