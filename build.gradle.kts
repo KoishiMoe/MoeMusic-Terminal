@@ -22,6 +22,8 @@ java {
 application {
     mainClass.set("org.lolicode.moemusic.terminal.TerminalMainKt")
     applicationDefaultJvmArgs = listOf(
+        // 256M is more than enough. By default it will eat ~2G ram.
+        "-Xmx256M",
         // LavaPlayer loads native helpers during playback bootstrap. Java 24+ warns on stderr
         // unless native access is explicitly granted before application logging is active.
         "--enable-native-access=ALL-UNNAMED",
