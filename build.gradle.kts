@@ -1,7 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm") version "2.3.21"
+    kotlin("jvm") version "2.4.0"
     application
 }
 
@@ -31,20 +31,20 @@ application {
 }
 
 dependencies {
-    implementation("org.lolicode.moemusic:api:2.1.0")
-    implementation("org.lolicode.moemusic:core:1.3.0")
-    implementation("org.lolicode.moemusic:client-core:1.3.0")
+    implementation("org.lolicode.moemusic:api:2.1.1")
+    implementation("org.lolicode.moemusic:core:1.3.1")
+    implementation("org.lolicode.moemusic:client-core:1.3.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.googlecode.lanterna:lanterna:3.1.5")
-    implementation("org.jline:jline-terminal:4.1.2")
-    implementation("org.jline:jline-terminal-jni:4.1.2")
-    implementation("org.slf4j:slf4j-api:2.0.17")
-    runtimeOnly("org.slf4j:slf4j-simple:2.0.17")
+    implementation("org.jline:jline-terminal:4.2.1")
+    implementation("org.jline:jline-terminal-jni:4.2.1")
+    implementation("org.slf4j:slf4j-api:2.0.18")
+    runtimeOnly("org.slf4j:slf4j-simple:2.0.18")
 
     testImplementation(kotlin("test"))
-    testImplementation("org.junit.jupiter:junit-jupiter:6.0.3")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.0.3")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.0")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.0")
 }
 
 tasks.test {
