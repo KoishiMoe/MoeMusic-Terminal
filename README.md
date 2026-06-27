@@ -76,8 +76,3 @@ At that time, you can enable Sixel image rendering with the `--cover sixel` para
 
 - **Konsole Image Blurriness**: When running under Konsole on Linux, cover art rendering may appear blurry. Due to the developer's technical limitations, this issue cannot currently be resolved (it is unclear whether this is a Konsole-specific limitation). Cover art renders correctly in Kitty.
 - **Windows Terminal image position and sizing**: In Windows Terminal, cover images may be misaligned or rendered at incorrect sizes. After resizing the window, a placeholder colored area may remain outside the image bounds.
-
-## Technical Details
-
-- **Runtime Logs**: Logs are written to `<config-dir>/terminal.log` while the TUI is active, preventing background warnings or logs from corrupting the terminal display.
-- **Java 24+ Compatibility**: The generated launcher enables native access for unnamed modules. This suppresses the restricted native-access warning emitted by LavaPlayer before application logging is redirected away from the terminal.

@@ -76,8 +76,3 @@ build\install\moemusic-terminal\bin\moemusic-terminal.bat
 
 - **Konsole 图片模糊**：在 Linux 的 Konsole 终端中运行时，封面图片可能会出现模糊。受限于作者的技术水平，目前该问题无法解决（尚不确定是否为 Konsole 终端自身的限制）。在 Kitty 终端中显示正常。
 - **Windows Terminal 图片位置和尺寸**：在 Windows Terminal 中，封面图片可能会出现位置偏移和尺寸不正确的问题，在调整窗口大小后可能会出现超出图片尺寸的占位色块。
-
-## 技术细节
-
-- **运行时日志**：当 TUI 处于活动状态时，日志将被写入 `<config-dir>/terminal.log`，以防后台警告或常规日志损坏终端屏幕显示。
-- **Java 24+ 兼容性**：生成的启动器已为未命名模块启用原生访问。这可以屏蔽 LavaPlayer 在应用程序日志重定向至终端外部前输出的 Java 24+ 限制原生访问警告。
