@@ -1,10 +1,12 @@
 package org.lolicode.moemusic.terminal
 
 import kotlinx.coroutines.runBlocking
+import org.lolicode.moemusic.core.protocol.MoeMusicProtocol
 import org.lolicode.moemusic.core.protocol.PacketIds
 import org.lolicode.moemusic.core.protocol.proto.SearchResponse
 import org.lolicode.moemusic.core.protocol.proto.SelectionEntryKindProto
 import org.lolicode.moemusic.core.protocol.proto.SelectionEntryProto
+import org.lolicode.moemusic.core.session.UserSessionRegistry
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,6 +25,8 @@ class TerminalApplicationTest {
             assertTrue(app.client.serverHandshakeReceived)
             val catalog = assertNotNull(app.client.sourceCatalog)
             assertTrue(catalog.sources.any { it.id == "http" })
+            assertEquals(MoeMusicProtocol.VERSION, UserSessionRegistry.protocolVersion(app.user.id))
+            assertTrue(UserSessionRegistry.supportsFraming(app.user.id))
         }
     }
 

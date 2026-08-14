@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.lolicode.moemusic.api.LocalizedText
+import org.lolicode.moemusic.api.MoeMusicUser
 import org.lolicode.moemusic.api.model.TrackAddResult
 import org.lolicode.moemusic.api.model.TrackInfo
 import org.lolicode.moemusic.core.audio.LavaPlayerNativeBootstrap
@@ -24,6 +25,7 @@ import org.lolicode.moemusic.core.session.UserSessionRegistry
 import org.lolicode.moemusic.core.user.UserActionServiceImpl
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
+import java.util.UUID
 
 class TerminalApplication(
     val configDir: Path,
@@ -122,25 +124,37 @@ class TerminalApplication(
     private class TerminalSessionBridge(
         private val user: TerminalUser,
     ) : ServerPacketSessionBridge {
-        override fun activate(sender: org.lolicode.moemusic.api.MoeMusicUser, locale: String): org.lolicode.moemusic.api.MoeMusicUser {
+        override fun activate(
+            sender: MoeMusicUser,
+            locale: String,
+            protocolVersion: Int,
+        ): MoeMusicUser {
             user.updateLocale(locale)
-            UserSessionRegistry.activate(user, locale)
+            UserSessionRegistry.activate(user, locale, protocolVersion)
             return user
         }
 
-        override fun standby(sender: org.lolicode.moemusic.api.MoeMusicUser, locale: String): org.lolicode.moemusic.api.MoeMusicUser {
+        override fun standby(
+            sender: MoeMusicUser,
+            locale: String,
+            protocolVersion: Int,
+        ): MoeMusicUser {
             user.updateLocale(locale)
-            UserSessionRegistry.registerStandby(user, locale)
+            UserSessionRegistry.registerStandby(user, locale, protocolVersion)
             return user
         }
 
-        override fun handleRegisteredClientLeave(userId: java.util.UUID) {
+        override fun handleRegisteredClientLeave(userId: UUID) {
             val session = UserSessionRegistry.session(userId) ?: return
             if (session.participation != UserSessionRegistry.Participation.ACTIVE) return
             UserSessionRegistry.standby(userId)
             if (UserSessionRegistry.activeCount() == 0) {
                 ServerRuntimeCoordinator.releaseNativeAudienceLeaseIfHeld()
             }
+        }
+
+        override fun notifyOutdatedClient(user: MoeMusicUser, clientProtocolVersion: Int) {
+            // Explicit no-op: terminal platform uses in-memory loopback and does not accept remote network traffic.
         }
     }
 }
