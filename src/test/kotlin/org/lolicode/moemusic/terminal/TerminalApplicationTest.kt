@@ -7,6 +7,7 @@ import org.lolicode.moemusic.core.protocol.proto.SearchResponse
 import org.lolicode.moemusic.core.protocol.proto.SelectionEntryKindProto
 import org.lolicode.moemusic.core.protocol.proto.SelectionEntryProto
 import org.lolicode.moemusic.core.session.UserSessionRegistry
+import org.lolicode.moemusic.core.transport.FramedPayloadCodec
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -54,27 +55,31 @@ class TerminalApplicationTest {
 
             runtime.receiveFromServer(
                 PacketIds.SEARCH_RESPONSE,
-                SearchResponse(
-                    request_id = 1,
-                    query = "demo",
-                    source_id = "http",
-                    offset = 0,
-                    total = 3,
-                    has_more = true,
-                    entries = listOf(searchEntry("a"), searchEntry("b")),
-                ).encode(),
+                FramedPayloadCodec.encode(
+                    SearchResponse(
+                        request_id = 1,
+                        query = "demo",
+                        source_id = "http",
+                        offset = 0,
+                        total = 3,
+                        has_more = true,
+                        entries = listOf(searchEntry("a"), searchEntry("b")),
+                    ).encode(),
+                ).single(),
             )
             runtime.receiveFromServer(
                 PacketIds.SEARCH_RESPONSE,
-                SearchResponse(
-                    request_id = 2,
-                    query = "demo",
-                    source_id = "http",
-                    offset = 2,
-                    total = 3,
-                    has_more = false,
-                    entries = listOf(searchEntry("c")),
-                ).encode(),
+                FramedPayloadCodec.encode(
+                    SearchResponse(
+                        request_id = 2,
+                        query = "demo",
+                        source_id = "http",
+                        offset = 2,
+                        total = 3,
+                        has_more = false,
+                        entries = listOf(searchEntry("c")),
+                    ).encode(),
+                ).single(),
             )
 
             assertEquals(listOf("a", "b", "c"), runtime.searchResults.map { it.selectionId })
