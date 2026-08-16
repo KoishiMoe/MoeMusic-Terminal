@@ -25,13 +25,18 @@ class InMemoryNetworkChannel(
 
     override fun sendToClient(user: MoeMusicUser, packetId: PacketId, payload: ByteArray) {
         if (user.id != localUser.id) return
-        val frames = if (UserSessionRegistry.supportsFraming(user.id)) {
-            FramedPayloadCodec.encode(payload)
-        } else {
-            if (payload.size > FramedPayloadCodec.MAX_LEGACY_S2C_PAYLOAD_BYTES) return
-            listOf(payload)
+        if (UserSessionRegistry.supportsFraming(user.id)) {
+            if (payload.size <= FramedPayloadCodec.CHUNK_PAYLOAD_SIZE) {
+                clientSink.receiveFromServer(packetId, FramedPayloadCodec.encodeSingle(payload))
+            } else {
+                FramedPayloadCodec.encode(payload).forEach { frame ->
+                    clientSink.receiveFromServer(packetId, frame)
+                }
+            }
+            return
         }
-        frames.forEach { frame -> clientSink.receiveFromServer(packetId, frame) }
+        if (payload.size > FramedPayloadCodec.MAX_LEGACY_S2C_PAYLOAD_BYTES) return
+        clientSink.receiveFromServer(packetId, payload)
     }
 
     override fun sendToAllClients(packetId: PacketId, payload: ByteArray) {
