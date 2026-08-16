@@ -472,6 +472,11 @@ class TerminalClientRuntime(
             requestQueueRefresh()
         }
 
+        override fun onQueueClearResponse(response: QueueClearResponse) {
+            setStatus(response.failure.ifEmpty { response.success.ifEmpty { "Cleared ${response.removed_count} track(s)" } })
+            requestQueueRefresh()
+        }
+
         override fun onPlaybackControlResponse(response: PlaybackControlResponse) {
             setStatus(response.success.ifEmpty { response.failure.ifEmpty { "Playback control sent" } })
         }

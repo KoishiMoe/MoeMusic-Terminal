@@ -16,6 +16,7 @@ import com.googlecode.lanterna.terminal.MouseCaptureMode
 import com.googlecode.lanterna.terminal.Terminal
 import kotlinx.coroutines.launch
 import org.lolicode.moemusic.api.client.ContentFilterMutationTarget
+import org.lolicode.moemusic.api.client.QueueClearScope
 import org.lolicode.moemusic.api.debugString
 import org.lolicode.moemusic.api.model.*
 import org.lolicode.moemusic.api.service.PlaybackAction
@@ -205,28 +206,32 @@ class TerminalTui(
     }
 
     private fun handleCommand(character: Char?) {
-        when (character?.lowercaseChar()) {
-            'q' -> running.set(false)
-            '1' -> currentTab = Tab.NOW_PLAYING
-            '2' -> currentTab = Tab.SEARCH
-            '3' -> currentTab = Tab.QUEUE
-            '/' -> openPrompt(PromptMode.SEARCH, Tab.SEARCH)
-            'u' -> openPrompt(PromptMode.SUBMIT, currentTab)
-            'a' -> submitSelectedSearchResult(TrackAddMode.NORMAL)
-            'p' -> playSelectedNow()
-            'b' -> blockActiveTrack()
-            'r' -> requestQueue()
-            'x' -> removeSelectedQueueTrack()
-            'm' -> requestMoreSearchResults()
-            ' ' -> togglePause()
-            'n' -> playbackControl(PlaybackAction.SKIP)
-            's' -> playbackControl(PlaybackAction.STOP)
+        when (character) {
+            'C' -> clearQueueTracks()
             'c' -> reloadConfig()
-            'o' -> cycleSearchSource()
-            '+' -> adjustVolume(5)
-            '-' -> adjustVolume(-5)
-            'j' -> moveSelection(1)
-            'k' -> moveSelection(-1)
+            else -> when (character?.lowercaseChar()) {
+                'q' -> running.set(false)
+                '1' -> currentTab = Tab.NOW_PLAYING
+                '2' -> currentTab = Tab.SEARCH
+                '3' -> currentTab = Tab.QUEUE
+                '/' -> openPrompt(PromptMode.SEARCH, Tab.SEARCH)
+                'u' -> openPrompt(PromptMode.SUBMIT, currentTab)
+                'a' -> submitSelectedSearchResult(TrackAddMode.NORMAL)
+                'p' -> playSelectedNow()
+                'b' -> blockActiveTrack()
+                'r' -> requestQueue()
+                'x' -> removeSelectedQueueTrack()
+                'm' -> requestMoreSearchResults()
+                ' ' -> togglePause()
+                'n' -> playbackControl(PlaybackAction.SKIP)
+                's' -> playbackControl(PlaybackAction.STOP)
+                'o' -> cycleSearchSource()
+                '+' -> adjustVolume(5)
+                '-' -> adjustVolume(-5)
+                'j' -> moveSelection(1)
+                'k' -> moveSelection(-1)
+                else -> Unit
+            }
         }
     }
 
@@ -418,6 +423,19 @@ class TerminalTui(
             runCatching {
                 app.client.requestService.removeQueuedTrack(sourceId, track.id, track.queueEntryId)
             }.onFailure { app.client.setStatus("Remove failed: ${it.message}") }
+        }
+    }
+
+    private fun clearQueueTracks() {
+        app.scope.launch {
+            runCatching {
+                val result = app.client.requestService.clearQueue(QueueClearScope.ALL)
+                if (result.failureMessage != null) {
+                    app.client.setStatus("Clear queue failed: ${result.failureMessage}")
+                } else {
+                    app.client.setStatus(result.successMessage ?: "Cleared ${result.removedCount} track(s)")
+                }
+            }.onFailure { app.client.setStatus("Clear queue failed: ${it.message}") }
         }
     }
 
@@ -1518,6 +1536,7 @@ class TerminalTui(
             "m more",
             "r refresh",
             "x remove",
+            "C clear",
             "j/k move",
             "c reload",
             "q quit",
