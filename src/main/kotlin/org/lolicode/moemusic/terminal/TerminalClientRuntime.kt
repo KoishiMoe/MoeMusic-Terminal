@@ -1,6 +1,7 @@
 package org.lolicode.moemusic.terminal
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import org.lolicode.moemusic.api.LocalizedText
 import org.lolicode.moemusic.api.client.*
 import org.lolicode.moemusic.api.event.UserParticipationState
@@ -236,8 +237,19 @@ class TerminalClientRuntime(
         return parseLyrics(ctx.track.lyricLrc)?.lineAt(position)?.text
     }
 
+    private val clientRequestService = org.lolicode.moemusic.clientcore.request.DirectClientRequestService(runtime)
+
     private fun requestQueueRefresh() {
-        runtime.sendQueueRequest()
+        scope.launch {
+            try {
+                val snapshot = clientRequestService.requestFullQueue()
+                rawQueueTracks = snapshot.tracks
+                queueTracks = visibleQueueTracks(rawQueueTracks)
+                queueFailure = snapshot.failureMessage
+            } catch (e: Exception) {
+                queueFailure = e.message
+            }
+        }
     }
 
     private fun visibleSearchResults(entries: List<SelectionEntry>): List<SelectionEntry> {
@@ -381,15 +393,36 @@ class TerminalClientRuntime(
 
         override fun onIdentifierSubmitResponse(response: IdentifierSubmitResponse) {
             if (response.choices.isNotEmpty()) {
-                rawSearchResults = response.choices.map { it.toApi() }
+                val initialChoices = response.choices.map { it.toApi() }
+                rawSearchResults = initialChoices
                 searchResults = visibleSearchResults(rawSearchResults)
                 searchLoadedCount = rawSearchResults.size
-                searchTotal = rawSearchResults.size
-                searchHasMore = false
+                searchTotal = if (response.total > 0) response.total else rawSearchResults.size
+                searchHasMore = response.has_more
                 searchQuery = ""
                 searchResultSourceId = rawSearchResults.firstOrNull()?.sourceId.orEmpty()
                 searchFailure = null
                 setStatus("Identifier returned ${searchResults.size} choice(s)")
+
+                if (response.has_more && response.session_id.isNotEmpty()) {
+                    val sessionId = response.session_id
+                    scope.launch {
+                        try {
+                            var offset = initialChoices.size
+                            var hasMore = true
+                            while (hasMore) {
+                                val page = clientRequestService.requestSelectionPage(sessionId, offset = offset, limit = 50)
+                                if (page.choices.isEmpty()) break
+                                rawSearchResults = rawSearchResults + page.choices
+                                searchResults = visibleSearchResults(rawSearchResults)
+                                searchLoadedCount = rawSearchResults.size
+                                offset += page.choices.size
+                                hasMore = page.hasMore
+                                setStatus("Loaded ${rawSearchResults.size}/${searchTotal} choice(s)")
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
             } else {
                 setStatus(response.success.ifEmpty { response.failure.ifEmpty { "Identifier submit completed" } })
             }
@@ -398,15 +431,36 @@ class TerminalClientRuntime(
 
         override fun onSelectionSubmitResponse(response: SelectionSubmitResponse) {
             if (response.choices.isNotEmpty()) {
-                rawSearchResults = response.choices.map { it.toApi() }
+                val initialChoices = response.choices.map { it.toApi() }
+                rawSearchResults = initialChoices
                 searchResults = visibleSearchResults(rawSearchResults)
                 searchLoadedCount = rawSearchResults.size
-                searchTotal = rawSearchResults.size
-                searchHasMore = false
+                searchTotal = if (response.total > 0) response.total else rawSearchResults.size
+                searchHasMore = response.has_more
                 searchQuery = ""
                 searchResultSourceId = rawSearchResults.firstOrNull()?.sourceId.orEmpty()
                 searchFailure = null
                 setStatus("Selection returned ${searchResults.size} choice(s)")
+
+                if (response.has_more && response.session_id.isNotEmpty()) {
+                    val sessionId = response.session_id
+                    scope.launch {
+                        try {
+                            var offset = initialChoices.size
+                            var hasMore = true
+                            while (hasMore) {
+                                val page = clientRequestService.requestSelectionPage(sessionId, offset = offset, limit = 50)
+                                if (page.choices.isEmpty()) break
+                                rawSearchResults = rawSearchResults + page.choices
+                                searchResults = visibleSearchResults(rawSearchResults)
+                                searchLoadedCount = rawSearchResults.size
+                                offset += page.choices.size
+                                hasMore = page.hasMore
+                                setStatus("Loaded ${rawSearchResults.size}/${searchTotal} choice(s)")
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
             } else {
                 setStatus(response.success.ifEmpty { response.failure.ifEmpty { "Selection submit completed" } })
             }

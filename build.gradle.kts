@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "org.lolicode.moemusic"
-version = "1.3.0"
+version = "1.4.0"
 
 kotlin {
     compilerOptions {
@@ -31,7 +31,7 @@ application {
 }
 
 dependencies {
-    implementation("org.lolicode.moemusic:api:2.1.1")
+    implementation("org.lolicode.moemusic:api:2.2.0")
     implementation("org.lolicode.moemusic:core:1.4.0")
     implementation("org.lolicode.moemusic:client-core:1.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
