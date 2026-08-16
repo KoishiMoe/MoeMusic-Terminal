@@ -19,6 +19,7 @@ class InMemoryNetworkChannel(
 ) : NetworkChannel {
 
     override fun sendToServer(packetId: PacketId, payload: ByteArray) {
+        if (payload.size > FramedPayloadCodec.MAX_LEGACY_C2S_PAYLOAD_BYTES) return
         serverRegistry.dispatch(packetId, payload, localUser)
     }
 
@@ -27,6 +28,7 @@ class InMemoryNetworkChannel(
         val frames = if (UserSessionRegistry.supportsFraming(user.id)) {
             FramedPayloadCodec.encode(payload)
         } else {
+            if (payload.size > FramedPayloadCodec.MAX_LEGACY_S2C_PAYLOAD_BYTES) return
             listOf(payload)
         }
         frames.forEach { frame -> clientSink.receiveFromServer(packetId, frame) }
