@@ -416,7 +416,7 @@ class TerminalTui(
         val sourceId = track.sourceId ?: return
         app.scope.launch {
             runCatching {
-                app.client.requestService.removeQueuedTrack(sourceId, track.id)
+                app.client.requestService.removeQueuedTrack(sourceId, track.id, track.queueEntryId)
             }.onFailure { app.client.setStatus("Remove failed: ${it.message}") }
         }
     }
