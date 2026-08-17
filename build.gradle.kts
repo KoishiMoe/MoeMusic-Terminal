@@ -1,7 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm") version "2.4.0"
+    kotlin("jvm") version "2.4.10"
     application
 }
 
@@ -37,14 +37,14 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     implementation("com.googlecode.lanterna:lanterna:3.1.5")
-    implementation("org.jline:jline-terminal:4.2.1")
-    implementation("org.jline:jline-terminal-jni:4.2.1")
+    implementation("org.jline:jline-terminal:4.3.1")
+    implementation("org.jline:jline-terminal-jni:4.3.1")
     implementation("org.slf4j:slf4j-api:2.0.18")
     runtimeOnly("org.slf4j:slf4j-simple:2.0.18")
 
     testImplementation(kotlin("test"))
-    testImplementation("org.junit.jupiter:junit-jupiter:6.1.0")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.0")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher:6.1.3")
 }
 
 tasks.test {
