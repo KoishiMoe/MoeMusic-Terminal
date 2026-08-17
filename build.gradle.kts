@@ -8,6 +8,42 @@ plugins {
 group = "org.lolicode.moemusic"
 version = "1.4.0"
 
+repositories {
+    mavenLocal()
+    mavenCentral()
+    maven {
+        url = uri("https://jitpack.io")
+        content { includeGroupByRegex("com\\.github\\.walkyst\\..*") }
+    }
+    maven {
+        name = "Lolicode Releases"
+        url = uri("https://maven.lolicode.org/releases")
+        content { includeGroupByRegex("org\\.lolicode.*") }
+    }
+    maven {
+        name = "Lolicode Snapshots"
+        url = uri("https://maven.lolicode.org/snapshots")
+        content { includeGroupByRegex("org\\.lolicode.*") }
+    }
+    maven {
+        name = "GitHubPackages"
+        url = uri("https://maven.pkg.github.com/lolicode-org/MoeMusic")
+        credentials {
+            username = providers.gradleProperty("gpr.user")
+                .orElse(providers.environmentVariable("GITHUB_ACTOR"))
+                .orElse("")
+                .get()
+            password = providers.gradleProperty("gpr.key")
+                .orElse(providers.environmentVariable("GITHUB_PACKAGES_TOKEN"))
+                .orElse(providers.environmentVariable("PACKAGES_READ_TOKEN"))
+                .orElse(providers.environmentVariable("GITHUB_TOKEN"))
+                .orElse("")
+                .get()
+        }
+        content { includeGroupByRegex("org\\.lolicode.*") }
+    }
+}
+
 kotlin {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_17
