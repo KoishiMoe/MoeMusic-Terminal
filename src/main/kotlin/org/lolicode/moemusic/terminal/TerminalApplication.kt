@@ -62,6 +62,11 @@ class TerminalApplication(
             pluginServicesFactory = ::buildPluginServices,
         )
 
+        val report = PluginManager.lastDiscoveryReport
+        if (report != null && report.hasIssues) {
+            throw PluginIssueException(report)
+        }
+
         PluginManager.activateClientRuntime(client.playbackService, client.requestService)
         PluginManager.dispatchClientRuntimeLoad()
         client.start()

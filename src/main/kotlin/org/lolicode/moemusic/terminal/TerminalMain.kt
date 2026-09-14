@@ -37,6 +37,9 @@ fun main(args: Array<String>) {
                 ).run()
             }
         }
+    } catch (e: PluginIssueException) {
+        System.err.println(e.message)
+        exitProcess(1)
     } catch (e: TerminalUnavailableException) {
         System.err.println(e.message)
         exitProcess(2)

@@ -38,7 +38,7 @@ class TerminalApplicationTest {
         TerminalApplication(configDir).use { app ->
             app.start()
 
-            val queue = app.client.requestService.requestQueue()
+            val queue = app.client.requestService.requestFullQueue()
 
             assertTrue(queue.tracks.isEmpty())
             assertTrue(queue.failureMessage == null)
@@ -86,6 +86,27 @@ class TerminalApplicationTest {
             assertEquals(3, runtime.searchLoadedCount)
             assertEquals(3, runtime.searchTotal)
             assertTrue(!runtime.searchHasMore)
+        }
+    }
+
+    @Test
+    fun `startup fails closed with PluginIssueException when plugin issue detected`() {
+        val configDir = createTempDirectory("moemusic-terminal-test-")
+        val pluginsDir = configDir.resolve("plugins")
+        java.nio.file.Files.createDirectories(pluginsDir)
+        java.nio.file.Files.writeString(pluginsDir.resolve("corrupt.jar"), "not a zip file")
+
+        try {
+            TerminalApplication(configDir).use { app ->
+                val error = kotlin.test.assertFailsWith<PluginIssueException> {
+                    app.start()
+                }
+                assertTrue(error.report.hasIssues)
+                assertEquals(1, error.report.failedPlugins.size)
+                assertTrue(error.message?.contains("Plugin issues detected") == true)
+            }
+        } finally {
+            org.lolicode.moemusic.core.plugin.PluginManager.reset()
         }
     }
 
