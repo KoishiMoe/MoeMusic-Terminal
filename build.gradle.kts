@@ -67,7 +67,7 @@ application {
 }
 
 dependencies {
-    implementation("org.lolicode.moemusic:api:2.2.0")
+    implementation("org.lolicode.moemusic:api:2.3.0")
     implementation("org.lolicode.moemusic:core:1.4.0")
     implementation("org.lolicode.moemusic:client-core:1.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
