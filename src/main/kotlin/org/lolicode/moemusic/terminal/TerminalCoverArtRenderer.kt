@@ -322,10 +322,10 @@ internal class TerminalCoverArtRenderer(
                 val top = scaled.getRGB(col, row * 2)
                 val bottom = scaled.getRGB(col, row * 2 + 1)
                 if (unicodeBlocks) {
-                    TextCharacter(UPPER_HALF_BLOCK, rgb(top), rgb(bottom))
+                    TextCharacter.fromCharacter(UPPER_HALF_BLOCK, rgb(top), rgb(bottom))[0]
                 } else {
                     val blended = blend(top, bottom)
-                    TextCharacter(' ', blended, blended)
+                    TextCharacter.fromCharacter(' ', blended, blended)[0]
                 }
             }
         }
@@ -383,7 +383,7 @@ internal class TerminalCoverArtRenderer(
         label: String,
         background: TextColor = PLACEHOLDER_BG,
     ) {
-        val blank = TextCharacter(' ', PLACEHOLDER_FG, background)
+        val blank = TextCharacter.fromCharacter(' ', PLACEHOLDER_FG, background)[0]
         for (row in 0 until height) {
             for (col in 0 until width) {
                 graphics.setCharacter(x + col, y + row, blank)

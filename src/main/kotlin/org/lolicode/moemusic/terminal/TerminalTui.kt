@@ -407,7 +407,7 @@ class TerminalTui(
 
     private fun requestQueue() {
         app.scope.launch {
-            runCatching { app.client.requestService.requestQueue() }
+            runCatching { app.client.requestService.requestFullQueue() }
                 .onFailure { app.client.setStatus("Queue request failed: ${it.message}") }
         }
     }
@@ -1360,19 +1360,19 @@ class TerminalTui(
             graphics.setCharacter(
                 rect.x + index,
                 rect.y,
-                TextCharacter(
+                TextCharacter.fromCharacter(
                     char,
                     if (inFilledRegion) BAR_LABEL_ON_FILL else TEXT,
                     if (inFilledRegion) foreground else background,
                     SGR.BOLD,
-                ),
+                )[0],
             )
         }
     }
 
     private fun fillRect(graphics: TextGraphics, rect: Rect, background: TextColor) {
         if (rect.width <= 0 || rect.height <= 0) return
-        val character = TextCharacter(' ', TEXT, background)
+        val character = TextCharacter.fromCharacter(' ', TEXT, background)[0]
         for (row in 0 until rect.height) {
             for (col in 0 until rect.width) {
                 graphics.setCharacter(rect.x + col, rect.y + row, character)
